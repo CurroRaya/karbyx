@@ -31,7 +31,7 @@ cargo run --release -p forge-usage -- watch
 | ⌘1…⌘9, ⌃Tab, ⌘⇧↑/↓ | Cambiar de pestaña |
 | ⌘F, ⌘G / ⌘⇧G | Buscar en el historial, siguiente / anterior (↵ y ⇧↵ dentro de la barra) |
 | ⌘C / ⌘V | Copiar la selección / pegar (con bracketed paste) |
-| ⌘B / ⌘⌥B | Mostrar u ocultar la barra de sesiones / el panel de consumo |
+| ⌘B / ⌘⌥B | Mostrar u ocultar la barra de sesiones / el panel de consumo (este aparece solo en pestañas con una sesión de IA; ⌘⌥B lo fuerza en la pestaña actual) |
 | ⌘+ / ⌘- / ⌘0 | Tamaño de fuente |
 | ⌘← / ⌘→, ⌥← / ⌥→, ⌘⌫ | Inicio / fin de línea, palabra anterior / siguiente, borrar línea |
 | ⌘K | Limpiar pantalla |
@@ -76,8 +76,10 @@ Acciones configurables: `copy`, `paste`, `quit`, `new_tab`, `new_ai`, `close`,
 
 ### Asistentes y límites
 
-Por defecto forge detecta qué asistentes tienes instalados y muestra una
-pestaña por cada uno en el panel derecho. Se puede elegir en
+El panel derecho de consumo aparece solo cuando la pestaña activa tiene una
+sesión de IA (abierta con ⌘⇧C o un `claude`/`codex`/`gemini` lanzado a mano) y
+muestra la vista de ese asistente. Por defecto forge detecta qué asistentes
+tienes instalados y muestra una pestaña por cada uno en ese panel. Se puede elegir en
 `~/.config/forge/usage.toml`:
 
 ```toml
@@ -103,5 +105,7 @@ cargo clippy --workspace --all-targets
 FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app   # vuelca un frame a PNG
 FORGE_PROVIDER=codex cargo run --release -p forge-app               # arranca con ese asistente
 FORGE_SELFTEST=1 cargo run --release -p forge-app                   # teclea solo y registra frames lentos
+FORGE_PROFILE=1 FORGE_SELFTEST=1 cargo run --release -p forge-app  # registra el tiempo de todos los frames
 FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra configuración
+FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
 ```

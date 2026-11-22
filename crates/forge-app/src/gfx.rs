@@ -40,10 +40,16 @@ pub struct FontSpec {
     pub padding_pt: f32,
 }
 
-struct RowCache {
-    hash: u64,
+/// Línea ya maquetada, reutilizable en cualquier fila y panel.
+struct LineBuf {
     buffer: Buffer,
+    last_used: u64,
 }
+
+/// Fila vacía: no se pinta texto.
+const BLANK: u64 = 0;
+/// Frames que una línea maquetada sobrevive sin usarse (≈5 s a 60 fps).
+const LINE_TTL_FRAMES: u64 = 300;
 
 struct LabelBuf {
     buffer: Buffer,
@@ -73,7 +79,12 @@ pub struct Gfx {
     /// Capa superpuesta (barra de búsqueda...): se pinta encima de todo.
     overlay_text: TextRenderer,
     overlay_rects: RectRenderer,
-    rows: HashMap<PaneId, Vec<RowCache>>,
+    /// Caché de líneas maquetadas por contenido: al hacer scroll las líneas
+    /// cambian de fila pero no de texto, y se reutilizan sin volver a maquetar.
+    lines: HashMap<u64, LineBuf>,
+    /// Clave de línea de cada fila visible, por panel.
+    pane_rows: HashMap<PaneId, Vec<u64>>,
+    frame_no: u64,
     labels: HashMap<u64, LabelBuf>,
     pub metrics: CellMetrics,
     font: FontSpec,
@@ -89,6 +100,23 @@ fn measure(font_system: &mut FontSystem, spec: &FontSpec, scale: f32) -> CellMet
     b.shape_until_scroll(font_system, false);
     let cell_w = b.layout_runs().next().and_then(|r| r.glyphs.first().map(|g| g.w)).unwrap_or(font_px * 0.6);
     CellMetrics { font_px, cell_w, cell_h, pad: (spec.padding_pt * scale).round() }
+}
+
+/// Huella del texto visible de una línea: carácter, color y estilo. El
+/// fondo, subrayados y selección se pintan aparte y no cuentan, así que una
+/// línea seleccionada reutiliza su maquetación. Las filas vacías dan `BLANK`.
+fn line_key(cells: &[CellView]) -> u64 {
+    if cells.iter().all(|c| c.spacer || c.c == ' ' || c.c == '\0') {
+        return BLANK;
+    }
+    let mut h = DefaultHasher::new();
+    for c in cells.iter().filter(|c| !c.spacer) {
+        c.c.hash(&mut h);
+        if c.c != ' ' {
+            (c.fg, c.bold, c.italic).hash(&mut h);
+        }
+    }
+    h.finish().max(1)
 }
 
 fn label_key(l: &Label) -> u64 {
@@ -166,7 +194,9 @@ impl Gfx {
             rects,
             overlay_text,
             overlay_rects,
-            rows: HashMap::new(),
+            lines: HashMap::new(),
+            pane_rows: HashMap::new(),
+            frame_no: 0,
             labels: HashMap::new(),
             metrics,
             font,
@@ -192,7 +222,8 @@ impl Gfx {
         self.font = font;
         let scale = self.scale();
         self.metrics = measure(&mut self.font_system, &self.font, scale);
-        self.rows.clear();
+        self.lines.clear();
+        self.pane_rows.clear();
     }
 
     pub fn font(&self) -> &FontSpec {
@@ -229,39 +260,37 @@ impl Gfx {
         (row, col, fx.fract() >= 0.5)
     }
 
-    /// Prepara el texto de las filas de un panel (solo rehace las que cambian).
-    pub fn prepare_rows(&mut self, pane: PaneId, snap: &Snapshot, width: f32) {
-        for r in 0..snap.rows {
-            self.row_buffer(pane, r, snap.row(r), width);
-        }
-        if let Some(rows) = self.rows.get_mut(&pane) {
-            rows.truncate(snap.rows);
-        }
+    /// Prepara el texto de las filas de un panel. Solo se maquetan las líneas
+    /// que no estén ya en la caché.
+    pub fn prepare_rows(&mut self, pane: PaneId, snap: &Snapshot) {
+        let keys: Vec<u64> = (0..snap.rows).map(|r| self.line_buffer(snap.row(r))).collect();
+        self.pane_rows.insert(pane, keys);
     }
 
-    fn row_buffer(&mut self, pane: PaneId, r: usize, cells: &[CellView], width: f32) {
-        let mut h = DefaultHasher::new();
-        cells.hash(&mut h);
-        let hash = h.finish();
+    /// Clave de la línea; la maqueta si no estaba en caché.
+    fn line_buffer(&mut self, cells: &[CellView]) -> u64 {
+        let key = line_key(cells);
+        if key == BLANK {
+            return BLANK;
+        }
+        let frame = self.frame_no;
+        if let Some(l) = self.lines.get_mut(&key) {
+            l.last_used = frame;
+            return key;
+        }
         let m = self.metrics;
-        let rows = self.rows.entry(pane).or_default();
-        while rows.len() <= r {
-            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(m.font_px, m.cell_h));
-            buffer.set_monospace_width(Some(m.cell_w));
-            buffer.set_wrap(Wrap::None);
-            rows.push(RowCache { hash: u64::MAX, buffer });
-        }
-        let row = &mut rows[r];
-        row.buffer.set_size(Some(width), Some(m.cell_h));
-        if row.hash == hash {
-            return;
-        }
-        row.hash = hash;
+        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(m.font_px, m.cell_h));
+        buffer.set_monospace_width(Some(m.cell_w));
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(None, Some(m.cell_h));
 
         // Agrupa celdas consecutivas con el mismo estilo en un span.
         let mut spans: Vec<(String, Attrs<'static>)> = Vec::new();
         let base = Attrs::new().family(Family::Monospace);
+        let mut ascii = true;
         for c in cells.iter().filter(|c| !c.spacer) {
+            let ch = if c.c == '\0' { ' ' } else { c.c };
+            ascii &= ch.is_ascii();
             let mut a = base.clone().color(Color::rgb(c.fg[0], c.fg[1], c.fg[2]));
             if c.bold {
                 a = a.weight(Weight::BOLD);
@@ -269,19 +298,19 @@ impl Gfx {
             if c.italic {
                 a = a.style(Style::Italic);
             }
-            let ch = if c.c == '\0' { ' ' } else { c.c };
             match spans.last_mut() {
-                Some((s, prev)) if prev == &a => s.push(ch),
+                // Los espacios se unen al span anterior: su color no se ve.
+                Some((s, prev)) if prev == &a || ch == ' ' => s.push(ch),
                 _ => spans.push((ch.to_string(), a)),
             }
         }
-        row.buffer.set_rich_text(
-            spans.iter().map(|(s, a)| (s.as_str(), a.clone())),
-            &base,
-            Shaping::Advanced,
-            None,
-        );
-        row.buffer.shape_until_scroll(&mut self.font_system, false);
+        // El texto ASCII no necesita el motor de maquetación complejo
+        // (HarfBuzz): la maquetación básica es mucho más barata.
+        let shaping = if ascii { Shaping::Basic } else { Shaping::Advanced };
+        buffer.set_rich_text(spans.iter().map(|(s, a)| (s.as_str(), a.clone())), &base, shaping, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.lines.insert(key, LineBuf { buffer, last_used: frame });
+        key
     }
 
     fn label_buffer(&mut self, l: &Label) -> u64 {
@@ -326,8 +355,11 @@ impl Gfx {
         clear: Rgb8,
         capture_to: Option<&Path>,
     ) -> bool {
-        // Las cachés de paneles que no se pintan se liberan.
-        self.rows.retain(|id, _| panes.iter().any(|p| p.pane == *id));
+        // Paneles que ya no se pintan y líneas que llevan tiempo sin usarse.
+        self.pane_rows.retain(|id, _| panes.iter().any(|p| p.pane == *id));
+        let frame = self.frame_no;
+        self.lines.retain(|_, l| l.last_used + LINE_TTL_FRAMES >= frame);
+        self.frame_no += 1;
         for l in self.labels.values_mut() {
             l.alive = false;
         }
@@ -345,15 +377,17 @@ impl Gfx {
         };
         let mut areas: Vec<TextArea> = Vec::new();
         for p in panes {
-            if let Some(rows) = self.rows.get(&p.pane) {
-                areas.extend(rows.iter().enumerate().map(|(r, row)| TextArea {
-                    buffer: &row.buffer,
-                    left: p.ox,
-                    top: p.oy + r as f32 * m.cell_h,
-                    scale: 1.0,
-                    bounds: bounds(p.clip),
-                    default_color,
-                    custom_glyphs: &[],
+            if let Some(rows) = self.pane_rows.get(&p.pane) {
+                areas.extend(rows.iter().enumerate().filter(|(_, k)| **k != BLANK).filter_map(|(r, k)| {
+                    Some(TextArea {
+                        buffer: &self.lines.get(k)?.buffer,
+                        left: p.ox,
+                        top: p.oy + r as f32 * m.cell_h,
+                        scale: 1.0,
+                        bounds: bounds(p.clip),
+                        default_color,
+                        custom_glyphs: &[],
+                    })
                 }));
             }
         }
@@ -566,4 +600,52 @@ pub fn terminal_rects(
         ]);
     }
     rects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell(c: char, fg: Rgb8, bg: Rgb8) -> CellView {
+        CellView {
+            c,
+            fg,
+            bg,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            wide: false,
+            spacer: false,
+        }
+    }
+
+    fn line(text: &str, fg: Rgb8, bg: Rgb8) -> Vec<CellView> {
+        text.chars().map(|c| cell(c, fg, bg)).collect()
+    }
+
+    #[test]
+    fn blank_rows_are_skipped() {
+        assert_eq!(line_key(&line("      ", [1, 1, 1], [0, 0, 0])), BLANK);
+        assert_ne!(line_key(&line("  x   ", [1, 1, 1], [0, 0, 0])), BLANK);
+    }
+
+    #[test]
+    fn key_ignores_background_and_space_color() {
+        // Misma línea seleccionada (otro fondo): misma maquetación.
+        assert_eq!(
+            line_key(&line("hola", [9, 9, 9], [0, 0, 0])),
+            line_key(&line("hola", [9, 9, 9], [50, 50, 50]))
+        );
+        // El color de los espacios no cuenta.
+        let mut a = line("a b", [9, 9, 9], [0, 0, 0]);
+        let b = a.clone();
+        a[1].fg = [200, 0, 0];
+        assert_eq!(line_key(&a), line_key(&b));
+        // El color del texto sí.
+        assert_ne!(
+            line_key(&line("hola", [9, 9, 9], [0, 0, 0])),
+            line_key(&line("hola", [8, 8, 8], [0, 0, 0]))
+        );
+    }
 }

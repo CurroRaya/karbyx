@@ -47,7 +47,7 @@ fn ai_command(cmd: &str) -> String {
     )
 }
 
-/// Mide las fases de un frame y avisa si alguno es lento (>= 25 ms).
+/// Mide las fases de un frame y avisa si es lento (>= 25 ms).
 struct Profiler {
     start: Instant,
     last: Instant,
@@ -67,11 +67,14 @@ impl Profiler {
     }
 
     fn report(&self) {
+        // `FORGE_PROFILE=1` registra todos los frames, no solo los lentos.
+        static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let all = *ALL.get_or_init(|| std::env::var_os("FORGE_PROFILE").is_some());
         let total = self.start.elapsed();
-        if total >= Duration::from_millis(25) {
+        if all || total >= Duration::from_millis(25) {
             let detail: Vec<String> =
                 self.phases.iter().map(|(n, d)| format!("{n}={:.1}", d.as_secs_f64() * 1000.0)).collect();
-            log::warn!("frame lento {:.1} ms: {}", total.as_secs_f64() * 1000.0, detail.join(" "));
+            log::warn!("frame {:.1} ms: {}", total.as_secs_f64() * 1000.0, detail.join(" "));
         }
     }
 }
@@ -178,7 +181,11 @@ struct App {
     scroll_accum: f64,
     clipboard: Option<arboard::Clipboard>,
     show_left: bool,
-    show_right: bool,
+    /// Panel de consumo: `None` = automático (visible si la pestaña activa
+    /// tiene una sesión de IA); `Some` = forzado a mano con ⌘⌥B en esta pestaña.
+    right_override: Option<bool>,
+    /// Asistente de la pestaña activa en el último frame.
+    last_tab_ai: Option<Provider>,
     /// Asistente seleccionado en el panel derecho.
     usage_sel: usize,
     /// Proveedor a seleccionar en cuanto lleguen los datos (`FORGE_PROVIDER`).
@@ -222,7 +229,8 @@ impl App {
             scroll_accum: 0.0,
             clipboard: arboard::Clipboard::new().ok(),
             show_left: true,
-            show_right: true,
+            right_override: None,
+            last_tab_ai: None,
             usage_sel: 0,
             pending_provider: std::env::var("FORGE_PROVIDER").ok().and_then(|v| Provider::from_id(&v)),
             cursor: (-1.0, -1.0),
@@ -290,8 +298,28 @@ impl App {
             g.config.height as f32,
             g.scale(),
             self.show_left,
-            self.show_right,
+            self.right_visible(),
         ))
+    }
+
+    /// Asistente de IA que corre en la pestaña activa (el del panel con foco
+    /// si lo tiene, si no el de cualquier otro panel de la pestaña).
+    fn tab_ai(&self) -> Option<Provider> {
+        let tab = self.tabs.get(self.active)?;
+        let ai_of = |id: &PaneId| self.panes.get(id).and_then(|p| p.title().1);
+        ai_of(&tab.focus).or_else(|| tab.root.leaves().iter().find_map(ai_of))
+    }
+
+    fn right_visible(&self) -> bool {
+        right_panel_visible(self.right_override, self.tab_ai().is_some())
+    }
+
+    /// Cambia la pestaña activa; el ajuste manual del panel no se arrastra.
+    fn set_active(&mut self, i: usize) {
+        if i != self.active {
+            self.right_override = None;
+        }
+        self.active = i;
     }
 
     fn focused_id(&self) -> Option<PaneId> {
@@ -327,7 +355,11 @@ impl App {
     fn spawn_pane(&mut self, kind: PaneKind, area: Area) -> Option<PaneId> {
         let gfx = self.gfx.as_ref()?;
         let size = gfx.grid_size(area);
+        // `FORGE_CAPTURE_AI`: pestaña de IA de prueba con una shell normal dentro
+        // (para capturas, sin lanzar el asistente de verdad).
+        let dry = capture::target().is_some() && std::env::var_os("FORGE_CAPTURE_AI").is_some();
         let command = match kind {
+            PaneKind::Ai(_) if dry => None,
             PaneKind::Ai(p) => {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
                 Some((shell, vec!["-l".into(), "-i".into(), "-c".into(), ai_command(p.command())]))
@@ -360,7 +392,7 @@ impl App {
         let Some(id) = self.spawn_pane(kind, layout.term) else { return false };
         self.close_search();
         self.tabs.push(Tab { root: Node::Leaf(id), focus: id });
-        self.active = self.tabs.len() - 1;
+        self.set_active(self.tabs.len() - 1);
         self.redraw();
         true
     }
@@ -394,7 +426,7 @@ impl App {
                 return;
             }
             if self.active > ti || self.active >= self.tabs.len() {
-                self.active = self.active.saturating_sub(1);
+                self.set_active(self.active.saturating_sub(1));
             }
         } else {
             tab.root.remove(id);
@@ -418,7 +450,7 @@ impl App {
     fn select_tab(&mut self, i: usize) {
         if i < self.tabs.len() && i != self.active {
             self.close_search();
-            self.active = i;
+            self.set_active(i);
         }
     }
 
@@ -452,7 +484,7 @@ impl App {
             Action::PrevTab if n > 0 => self.select_tab((self.active + n - 1) % n),
             Action::NextTab | Action::PrevTab => {}
             Action::ToggleLeft => self.show_left = !self.show_left,
-            Action::ToggleRight => self.show_right = !self.show_right,
+            Action::ToggleRight => self.right_override = Some(!self.right_visible()),
             Action::SplitRight => self.split(SplitDir::Horizontal),
             Action::SplitDown => self.split(SplitDir::Vertical),
             Action::Focus(nav) => {
@@ -830,6 +862,14 @@ impl App {
         }
         let Some(layout) = self.layout() else { return };
         let views = self.tab_views();
+        // Al cambiar el asistente de la pestaña activa, el panel muestra el suyo.
+        let tab_ai = self.tab_ai();
+        if tab_ai != self.last_tab_ai {
+            self.last_tab_ai = tab_ai;
+            if tab_ai.is_some() {
+                self.pending_provider = tab_ai;
+            }
+        }
         let Some(gfx) = &mut self.gfx else { return };
         let scale = gfx.scale();
         let tab = &self.tabs[self.active];
@@ -856,7 +896,7 @@ impl App {
             gfx::style_snapshot(&mut snap, &self.theme, cursor, multi && !focused);
             let (ox, oy) = (area.x + m.pad, area.y + m.pad);
             rects.extend(gfx::terminal_rects(&snap, &self.theme, &m, ox, oy, cursor));
-            gfx.prepare_rows(*id, &snap, area.w - m.pad);
+            gfx.prepare_rows(*id, &snap);
             texts.push(PaneText { pane: *id, ox, oy, clip: *area });
             if snap.display_offset > 0 {
                 let w = 160.0 * scale;
@@ -991,8 +1031,11 @@ impl ApplicationHandler<UserEvent> for App {
         if capture::target().is_some() {
             // En modo captura: una segunda pestaña y la primera dividida en dos.
             self.open_tab(PaneKind::Shell);
-            self.active = 0;
+            self.set_active(0);
             self.split(SplitDir::Horizontal);
+            if std::env::var_os("FORGE_CAPTURE_AI").is_some() {
+                self.open_tab(PaneKind::Ai(Provider::Claude));
+            }
         }
         self.usage = Some(usage::spawn(self.waker()));
         let proxy = self.proxy.clone();
@@ -1096,10 +1139,29 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// ¿Se ve el panel de consumo? Manda el ajuste manual; si no hay, solo
+/// cuando la pestaña tiene una sesión de IA.
+fn right_panel_visible(manual: Option<bool>, tab_has_ai: bool) -> bool {
+    manual.unwrap_or(tab_has_ai)
+}
+
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App::new(event_loop.create_proxy(), Config::load());
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_panel_visibility() {
+        assert!(!right_panel_visible(None, false), "sin IA no se ve");
+        assert!(right_panel_visible(None, true), "con IA aparece solo");
+        assert!(right_panel_visible(Some(true), false), "⌘⌥B lo fuerza");
+        assert!(!right_panel_visible(Some(false), true), "⌘⌥B lo oculta");
+    }
 }
