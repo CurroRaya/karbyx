@@ -1,0 +1,13 @@
+[package]
+name = "forge-usage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.9", features = ["derive"] }
+forge-ai = { version = "0.1.0", path = "../forge-ai" }
+owo-colors = "4.4.0"
+serde_json = "1.0.154"

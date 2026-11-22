@@ -1,0 +1,11 @@
+[package]
+name = "forge-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+anyhow = "1.0.104"
+crossbeam-channel = "0.5.17"
+libc = "0.2.191"
