@@ -12,6 +12,8 @@
 //! [terminal]
 //! scrollback = 10000
 //! option_as_alt = false      # true: ⌥ envía Meta (ESC+tecla) en vez de @, #, ñ...
+//! shell_integration = true   # bloques de comandos (zsh)
+//! notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 //!
 //! [theme]
 //! name = "one-dark"          # one-dark | dracula | solarized-dark | gruvbox | light
@@ -62,11 +64,16 @@ impl Default for WindowConfig {
 pub struct TerminalConfig {
     pub scrollback: usize,
     pub option_as_alt: bool,
+    /// Integración automática con zsh (bloques de comandos).
+    pub shell_integration: bool,
+    /// Avisar cuando termine un comando que tardó al menos estos segundos y
+    /// forge no está a la vista (0 = nunca).
+    pub notify_after_secs: u64,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        Self { scrollback: 10_000, option_as_alt: false }
+        Self { scrollback: 10_000, option_as_alt: false, shell_integration: true, notify_after_secs: 10 }
     }
 }
 

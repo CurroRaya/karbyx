@@ -34,6 +34,11 @@ pub enum Action {
     Find,
     FindNext,
     FindPrev,
+    /// Seleccionar el bloque (comando) anterior / siguiente.
+    BlockPrev,
+    BlockNext,
+    /// Preguntar a la IA por el bloque seleccionado (o el último fallido).
+    AskAi,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -61,6 +66,9 @@ const NAMES: &[(&str, Action)] = &[
     ("find", Action::Find),
     ("find_next", Action::FindNext),
     ("find_prev", Action::FindPrev),
+    ("block_prev", Action::BlockPrev),
+    ("block_next", Action::BlockNext),
+    ("ask_ai", Action::AskAi),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -90,6 +98,9 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("find", "cmd+f"),
     ("find_next", "cmd+g"),
     ("find_prev", "cmd+shift+g"),
+    ("block_prev", "cmd+up"),
+    ("block_next", "cmd+down"),
+    ("ask_ai", "cmd+i"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

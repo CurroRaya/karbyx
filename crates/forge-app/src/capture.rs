@@ -10,6 +10,12 @@ pub fn target() -> Option<PathBuf> {
     std::env::var_os("FORGE_SCREENSHOT").map(PathBuf::from)
 }
 
+/// Espera antes de capturar (`FORGE_CAPTURE_DELAY` en ms; 4 s por defecto).
+pub fn delay() -> std::time::Duration {
+    let ms = std::env::var("FORGE_CAPTURE_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(4000);
+    std::time::Duration::from_millis(ms)
+}
+
 /// Copia `texture` a memoria y la escribe como PNG RGBA.
 pub fn save(
     device: &wgpu::Device,

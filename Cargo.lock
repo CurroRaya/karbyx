@@ -860,6 +860,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "crossbeam-channel",
+ "dirs",
  "libc",
 ]
 

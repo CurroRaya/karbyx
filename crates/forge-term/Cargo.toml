@@ -8,4 +8,5 @@ license.workspace = true
 alacritty_terminal = "0.26.0"
 anyhow = "1.0.104"
 crossbeam-channel = "0.5.17"
+dirs = "7.0.0"
 libc = "0.2.191"

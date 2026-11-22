@@ -4,8 +4,11 @@
 //! en un hilo propio y expone un [`Snapshot`] del grid con los colores ya
 //! resueltos, para que el renderer no tenga que tocar el lock más de lo justo.
 
+pub mod blocks;
+mod io;
 pub mod mouse;
 pub mod proc;
+pub mod shell;
 pub mod theme;
 
 use std::borrow::Cow;
@@ -13,10 +16,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
+use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -28,6 +31,8 @@ use alacritty_terminal::tty;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 pub use alacritty_terminal::term::TermMode;
+pub use blocks::BlockInfo;
+use blocks::{BlockTable, parse_block_uri};
 pub use theme::{Rgb8, Theme};
 
 /// Eventos relevantes para la UI.
@@ -40,6 +45,13 @@ pub enum TermEvent {
     ClipboardStore(String),
     /// La shell terminó.
     Exited,
+    /// Un comando terminó (requiere la integración con la shell).
+    CommandFinished {
+        id: u64,
+        exit: Option<i32>,
+        duration: Duration,
+        command: Option<String>,
+    },
 }
 
 /// Tamaño del grid en celdas y del área en píxeles.
@@ -81,6 +93,9 @@ pub struct SessionOptions {
     pub cwd: Option<PathBuf>,
     pub env: HashMap<String, String>,
     pub scrollback: Option<usize>,
+    /// Activa la integración automática con la shell (bloques). Solo se
+    /// aplica a la shell por defecto (`command == None`) si es zsh.
+    pub shell_integration: bool,
 }
 
 /// Puente entre los eventos de alacritty y la UI.
@@ -131,6 +146,29 @@ pub struct Snapshot {
     pub display_offset: usize,
     pub mode: TermMode,
     pub background: Rgb8,
+    /// Bloques (comando + salida) visibles, de arriba abajo.
+    pub blocks: Vec<BlockSpan>,
+}
+
+/// Un bloque tal como se ve en el viewport.
+#[derive(Debug, Clone)]
+pub struct BlockSpan {
+    pub id: u64,
+    pub first_row: usize,
+    pub last_row: usize,
+    /// El inicio del bloque (su prompt) está dentro del viewport.
+    pub starts_here: bool,
+    /// Primera fila de salida del comando, si se ve.
+    pub output_row: Option<usize>,
+    pub info: BlockInfo,
+}
+
+/// Texto de un bloque, para copiarlo o enviarlo a un asistente.
+#[derive(Debug, Clone, Default)]
+pub struct BlockText {
+    pub command: Option<String>,
+    pub output: String,
+    pub exit: Option<i32>,
 }
 
 impl Snapshot {
@@ -141,8 +179,11 @@ impl Snapshot {
 
 pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
-    notifier: Notifier,
+    writer: Sender<Vec<u8>>,
+    pty: Mutex<tty::Pty>,
     events: Receiver<Event>,
+    block_events: Receiver<TermEvent>,
+    blocks: Arc<Mutex<BlockTable>>,
     theme: Theme,
     size: GridSize,
     /// Descriptor maestro del PTY (lo mantiene vivo el hilo de I/O).
@@ -204,6 +245,12 @@ impl Session {
         tty::setup_env();
         let mut env = opts.env.clone();
         env.entry("TERM_PROGRAM".into()).or_insert_with(|| "forge".into());
+        if opts.shell_integration && opts.command.is_none() {
+            let shell = std::env::var("SHELL").unwrap_or_default();
+            if let Some(vars) = shell::zsh_env(&shell) {
+                env.extend(vars);
+            }
+        }
         let pty_opts = tty::Options {
             shell: opts.command.map(|(p, a)| tty::Shell::new(p, a)),
             working_directory: opts.cwd,
@@ -218,11 +265,25 @@ impl Session {
         let listener = Listener { tx, waker };
         let config = Config { scrolling_history: opts.scrollback.unwrap_or(10_000), ..Config::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
-        let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
-        let notifier = Notifier(event_loop.channel());
-        event_loop.spawn();
+        let blocks = Arc::new(Mutex::new(BlockTable::default()));
+        let (block_tx, block_events) = unbounded();
+        let (writer, writer_rx) = unbounded();
+        io::spawn_reader(pty.file().try_clone()?, term.clone(), listener, blocks.clone(), block_tx);
+        io::spawn_writer(pty.file().try_clone()?, writer_rx);
 
-        Ok(Self { term, notifier, events, theme, size, master_fd, shell_pid, search: RefCell::new(None) })
+        Ok(Self {
+            term,
+            writer,
+            pty: Mutex::new(pty),
+            events,
+            block_events,
+            blocks,
+            theme,
+            size,
+            master_fd,
+            shell_pid,
+            search: RefCell::new(None),
+        })
     }
 
     /// Proceso en primer plano y su directorio (o los de la shell).
@@ -251,7 +312,13 @@ impl Session {
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         // Escribir vuelve a la parte inferior del scrollback, como en iTerm2.
         self.term.lock().scroll_display(Scroll::Bottom);
-        self.notifier.notify(bytes);
+        self.send(bytes.into().into_owned());
+    }
+
+    fn send(&self, bytes: Vec<u8>) {
+        if !bytes.is_empty() {
+            let _ = self.writer.send(bytes);
+        }
     }
 
     pub fn resize(&mut self, size: GridSize) {
@@ -260,7 +327,9 @@ impl Session {
         }
         self.size = size;
         self.term.lock().resize(size);
-        self.notifier.on_resize(size.into());
+        if let Ok(mut pty) = self.pty.lock() {
+            pty.on_resize(size.into());
+        }
     }
 
     // ---------- selección ----------
@@ -398,7 +467,7 @@ impl Session {
                 Event::ResetTitle => out.push(TermEvent::ResetTitle),
                 Event::Bell => out.push(TermEvent::Bell),
                 Event::ClipboardStore(_, s) => out.push(TermEvent::ClipboardStore(s)),
-                Event::PtyWrite(s) => self.notifier.notify(s.into_bytes()),
+                Event::PtyWrite(s) => self.send(s.into_bytes()),
                 Event::ColorRequest(i, fmt) => {
                     let term = self.term.lock();
                     let c = term.colors()[i];
@@ -413,15 +482,16 @@ impl Session {
                         };
                         alacritty_terminal::vte::ansi::Rgb { r: named[0], g: named[1], b: named[2] }
                     });
-                    self.notifier.notify(fmt(rgb).into_bytes());
+                    self.send(fmt(rgb).into_bytes());
                 }
                 Event::TextAreaSizeRequest(fmt) => {
-                    self.notifier.notify(fmt(self.size.into()).into_bytes());
+                    self.send(fmt(self.size.into()).into_bytes());
                 }
                 Event::ChildExit(_) | Event::Exit => out.push(TermEvent::Exited),
                 _ => {}
             }
         }
+        out.extend(self.block_events.try_iter());
         out
     }
 
@@ -472,10 +542,23 @@ impl Session {
             cols * rows
         ];
 
+        // Bloque de cada fila (según las marcas en sus celdas).
+        let mut row_block: Vec<Option<(u64, bool)>> = vec![None; rows];
+
         for ic in content.display_iter {
             let row = ic.point.line.0 + offset as i32;
             if row < 0 || row as usize >= rows {
                 continue;
+            }
+            if ic.extra.is_some()
+                && let Some((id, out)) = ic.hyperlink().and_then(|h| parse_block_uri(h.uri()))
+            {
+                let slot = &mut row_block[row as usize];
+                match slot {
+                    Some((sid, sout)) if *sid == id => *sout |= out,
+                    Some(_) => {}
+                    None => *slot = Some((id, out)),
+                }
             }
             let col = ic.point.column.0;
             let f = ic.flags;
@@ -523,6 +606,9 @@ impl Session {
                 && (cur_row as usize) < rows,
         };
 
+        let above = line_block(&term, Line(-(offset as i32) - 1), true);
+        let blocks = self.build_spans(&row_block, above);
+
         Snapshot {
             cols,
             rows,
@@ -531,14 +617,145 @@ impl Session {
             display_offset: offset,
             mode: content.mode,
             background: self.theme.background,
+            blocks,
         }
+    }
+
+    /// Agrupa las filas visibles en bloques. `above`: bloque de la última
+    /// línea marcada por encima del viewport (para la primera fila).
+    fn build_spans(&self, row_block: &[Option<(u64, bool)>], above: Option<u64>) -> Vec<BlockSpan> {
+        let mut spans: Vec<BlockSpan> = Vec::new();
+        let mut current = above;
+        for (r, rb) in row_block.iter().enumerate() {
+            let id = rb.map(|(id, _)| id).or(current);
+            let Some(id) = id else { continue };
+            let is_out = rb.is_some_and(|(_, out)| out);
+            match spans.last_mut() {
+                Some(s) if s.id == id => {
+                    s.last_row = r;
+                    if is_out && s.output_row.is_none() {
+                        s.output_row = Some(r);
+                    }
+                }
+                _ => spans.push(BlockSpan {
+                    id,
+                    first_row: r,
+                    last_row: r,
+                    starts_here: Some(id) != above || r > 0 && current != Some(id),
+                    output_row: is_out.then_some(r),
+                    info: BlockInfo::default(),
+                }),
+            }
+            current = Some(id);
+        }
+        if let Ok(t) = self.blocks.lock() {
+            for s in &mut spans {
+                if let Some(i) = t.get(s.id) {
+                    s.info = i.clone();
+                }
+            }
+        }
+        spans
+    }
+
+    /// Inicios de bloque en todo el historial: `(id, línea)` de arriba abajo.
+    fn block_starts(&self) -> Vec<(u64, Line)> {
+        let term = self.term.lock();
+        let mut out = Vec::new();
+        let mut prev = None;
+        for l in term.topmost_line().0..=term.bottommost_line().0 {
+            if let Some(id) = line_block(&term, Line(l), false)
+                && prev != Some(id)
+            {
+                out.push((id, Line(l)));
+                prev = Some(id);
+            }
+        }
+        out
+    }
+
+    /// Salta al bloque anterior (`up`) o siguiente respecto a `current` y lo
+    /// deja arriba del viewport. Devuelve el bloque seleccionado.
+    pub fn jump_block(&self, current: Option<u64>, up: bool) -> Option<u64> {
+        let starts = self.block_starts();
+        if starts.is_empty() {
+            return None;
+        }
+        let last = starts.len() - 1;
+        let idx = match current.and_then(|c| starts.iter().position(|(id, _)| *id == c)) {
+            Some(i) if up => i.checked_sub(1)?,
+            Some(i) => (i < last).then_some(i + 1)?,
+            // Sin selección: el último comando terminado (el último bloque es el prompt actual).
+            None if up => last.saturating_sub(if last > 0 { 1 } else { 0 }),
+            None => return None,
+        };
+        let (id, line) = starts[idx];
+        let mut term = self.term.lock();
+        if idx == last {
+            term.scroll_display(Scroll::Bottom);
+        } else {
+            let history = term.history_size() as i32;
+            let want = (-line.0).clamp(0, history);
+            let have = term.grid().display_offset() as i32;
+            term.scroll_display(Scroll::Delta(want - have));
+        }
+        Some(id)
+    }
+
+    /// Comando y salida de un bloque.
+    pub fn block_text(&self, id: u64) -> Option<BlockText> {
+        let starts = self.block_starts();
+        let i = starts.iter().position(|(b, _)| *b == id)?;
+        let term = self.term.lock();
+        let start = starts[i].1;
+        let end = starts.get(i + 1).map(|(_, l)| Line(l.0 - 1)).unwrap_or(term.bottommost_line());
+        let out_start = (start.0..=end.0).find(|l| line_has_output(&term, Line(*l), id));
+        let output = match out_start {
+            Some(o) => {
+                // Como mucho las últimas 300 líneas.
+                let o = o.max(end.0 - 299);
+                let text = term
+                    .bounds_to_string(Point::new(Line(o), Column(0)), Point::new(end, term.last_column()));
+                text.trim_end().to_string()
+            }
+            None => String::new(),
+        };
+        drop(term);
+        let info = self.blocks.lock().ok().and_then(|t| t.get(id).cloned()).unwrap_or_default();
+        Some(BlockText { command: info.command, output, exit: info.exit })
     }
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = self.notifier.0.send(Msg::Shutdown);
+/// Bloque marcado en una línea del grid. Con `search_up`, si la línea no
+/// tiene marcas busca hacia arriba (hasta 2000 líneas).
+fn line_block<T>(term: &Term<T>, line: Line, search_up: bool) -> Option<u64> {
+    let top = term.topmost_line().0;
+    let mut l = line.0;
+    let limit = if search_up { 2000 } else { 1 };
+    for _ in 0..limit {
+        if l < top || l > term.bottommost_line().0 {
+            return None;
+        }
+        let row = &term.grid()[Line(l)];
+        for c in 0..term.columns() {
+            let cell = &row[Column(c)];
+            if cell.extra.is_some()
+                && let Some((id, _)) = cell.hyperlink().and_then(|h| parse_block_uri(h.uri()))
+            {
+                return Some(id);
+            }
+        }
+        l -= 1;
     }
+    None
+}
+
+fn line_has_output<T>(term: &Term<T>, line: Line, id: u64) -> bool {
+    let row = &term.grid()[line];
+    (0..term.columns()).any(|c| {
+        let cell = &row[Column(c)];
+        cell.extra.is_some() && cell.hyperlink().and_then(|h| parse_block_uri(h.uri())) == Some((id, true))
+    })
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ consumo de tus asistentes de IA (Claude Code, Codex CLI, Gemini CLI) integrado.
 | Crate | Qué hace |
 |---|---|
 | `forge-app` | Binario de la terminal: render por GPU (wgpu + glyphon), pestañas en una barra lateral, paneles divididos, selección y búsqueda, panel de consumo de IA, `forge.toml` con temas y atajos |
-| `forge-term` | Sesión de terminal independiente de la UI: PTY + emulador VT (`alacritty_terminal`), selección, búsqueda, protocolos de ratón y snapshot del grid |
+| `forge-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
 | `forge-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
 | `forge-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
 
@@ -34,6 +34,9 @@ cargo run --release -p forge-usage -- watch
 | ⌘B / ⌘⌥B | Mostrar u ocultar la barra de sesiones / el panel de consumo (este aparece solo en pestañas con una sesión de IA; ⌘⌥B lo fuerza en la pestaña actual) |
 | ⌘+ / ⌘- / ⌘0 | Tamaño de fuente |
 | ⌘← / ⌘→, ⌥← / ⌥→, ⌘⌫ | Inicio / fin de línea, palabra anterior / siguiente, borrar línea |
+| ⌘↑ / ⌘↓ | Seleccionar el comando (bloque) anterior / siguiente; Esc quita la selección |
+| ⌘C (con un bloque seleccionado) | Copiar el comando y su salida |
+| ⌘I | Preguntar a la IA por el bloque seleccionado o el último que falló |
 | ⌘K | Limpiar pantalla |
 | ⌘Q | Salir |
 
@@ -41,6 +44,24 @@ cargo run --release -p forge-usage -- watch
 clic la línea y ⌥+arrastrar un bloque rectangular. Los divisores entre
 paneles se arrastran. Si la aplicación pide el ratón (vim, htop, tmux) los
 clics le llegan a ella; con ⇧ se fuerza la selección normal.
+
+### Bloques de comandos (estilo Warp)
+
+Con zsh, forge activa sola una integración con la shell (no toca tu
+`.zshrc`): cada comando y su salida forman un **bloque**.
+
+- Un separador fino entre comandos; los que fallan llevan una barra y un tinte
+  rojos y la etiqueta `✗ código`; los que tardan muestran su duración (`✓ 2,4 s`).
+- Clic en el margen izquierdo o ⌘↑/⌘↓ para seleccionar un bloque; ⌘C copia
+  el comando con su salida.
+- En un bloque fallido aparece **◆ Preguntar a Claude** (o al asistente
+  activo): abre al lado una sesión con el comando, el error y la salida ya
+  escritos.
+- Si un comando largo termina mientras forge no está a la vista, llega un
+  aviso de macOS.
+
+Las marcas son el estándar OSC 133, así que también funcionan con otras
+shells que las emitan (bash con su propia integración, fish, starship...).
 
 ### Configuración (`~/.config/forge/forge.toml`)
 
@@ -58,6 +79,8 @@ padding = 10
 [terminal]
 scrollback = 10000
 option_as_alt = false      # true: ⌥ envía Meta (ESC+tecla) en vez de @, #, ñ...
+shell_integration = true   # bloques de comandos (zsh)
+notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 
 [theme]
 name = "one-dark"          # one-dark | dracula | solarized-dark | gruvbox | light
@@ -72,7 +95,7 @@ Acciones configurables: `copy`, `paste`, `quit`, `new_tab`, `new_ai`, `close`,
 `next_tab`, `prev_tab`, `toggle_sidebar`, `toggle_usage`, `font_bigger`,
 `font_smaller`, `font_reset`, `clear`, `split_right`, `split_down`,
 `focus_left`, `focus_right`, `focus_up`, `focus_down`, `find`, `find_next`,
-`find_prev`.
+`find_prev`, `block_prev`, `block_next`, `ask_ai`.
 
 ### Asistentes y límites
 
@@ -108,4 +131,5 @@ FORGE_SELFTEST=1 cargo run --release -p forge-app                   # teclea sol
 FORGE_PROFILE=1 FORGE_SELFTEST=1 cargo run --release -p forge-app  # registra el tiempo de todos los frames
 FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra configuración
 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
+FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
 ```

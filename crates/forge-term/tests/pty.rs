@@ -93,3 +93,78 @@ fn search_highlights_and_steps() {
     assert!(!s.search_active());
     assert_eq!(s.snapshot().row(0)[4].bg, t.background);
 }
+
+#[test]
+fn blocks_from_manual_marks() {
+    // Dos comandos: el primero falla con código 2.
+    let script = r"printf '\033]133;A\007$ \033]133;B\007ls -x\033]633;E;ls -x\007\033]133;C\007\nout1\nout2\n\033]133;D;2\007\033]133;A\007$ \033]133;B\007'; sleep 3";
+    let size = GridSize { cols: 40, rows: 8, cell_width: 8, cell_height: 16 };
+    let opts = SessionOptions {
+        command: Some(("/bin/sh".into(), vec!["-c".into(), script.into()])),
+        ..Default::default()
+    };
+    let s = Session::spawn(opts, size, Theme::default(), Arc::new(|| {})).expect("spawn");
+    wait_for(&s, |sn| sn.blocks.len() == 2);
+
+    let snap = s.snapshot();
+    let (b1, b2) = (&snap.blocks[0], &snap.blocks[1]);
+    assert!(b1.starts_here && b2.starts_here);
+    assert_eq!((b1.first_row, b1.last_row), (0, 2));
+    assert_eq!(b1.output_row, Some(1));
+    assert_eq!(b1.info.exit, Some(2));
+    assert!(b1.info.failed());
+    assert_eq!(b1.info.command.as_deref(), Some("ls -x"));
+    assert_eq!(b2.first_row, 3);
+    assert!(b2.info.exit.is_none(), "el prompt actual aún no ha terminado");
+
+    let text = s.block_text(b1.id).expect("texto");
+    assert_eq!(text.output, "out1\nout2");
+    assert_eq!(text.command.as_deref(), Some("ls -x"));
+
+    // El evento de fin de comando llega con su código.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if s.poll_events().iter().any(|e| matches!(e, TermEvent::CommandFinished { exit: Some(2), .. })) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no llegó CommandFinished");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Saltar entre bloques: desde nada, ↑ va al último comando terminado.
+    assert_eq!(s.jump_block(None, true), Some(b1.id));
+    assert_eq!(s.jump_block(Some(b1.id), false), Some(b2.id));
+    assert_eq!(s.jump_block(Some(b1.id), true), None);
+}
+
+#[test]
+fn zsh_integration_end_to_end() {
+    if !std::path::Path::new("/bin/zsh").exists() {
+        return;
+    }
+    // Configuración de usuario vacía para que el test no dependa de ~/.zshrc.
+    let user = std::env::temp_dir().join(format!("forge-zdot-{}", std::process::id()));
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(user.join(".zshrc"), "PS1='%# '\n").unwrap();
+    let mut env = forge_term::shell::zsh_env("/bin/zsh").expect("integración zsh");
+    env.insert("FORGE_USER_ZDOTDIR".into(), user.to_string_lossy().into_owned());
+
+    let size = GridSize { cols: 60, rows: 12, cell_width: 8, cell_height: 16 };
+    let opts =
+        SessionOptions { command: Some(("/bin/zsh".into(), vec!["-i".into()])), env, ..Default::default() };
+    let s = Session::spawn(opts, size, Theme::default(), Arc::new(|| {})).expect("spawn");
+    wait_for(&s, |sn| !sn.blocks.is_empty());
+    s.write(b"echo hola\r".to_vec());
+    wait_for(&s, |sn| sn.blocks.len() >= 2);
+    s.write(b"false\r".to_vec());
+    wait_for(&s, |sn| sn.blocks.len() >= 3 && sn.blocks.iter().any(|b| b.info.exit == Some(1)));
+
+    let snap = s.snapshot();
+    let echo =
+        snap.blocks.iter().find(|b| b.info.command.as_deref() == Some("echo hola")).expect("bloque echo");
+    assert_eq!(echo.info.exit, Some(0));
+    assert_eq!(s.block_text(echo.id).unwrap().output, "hola");
+    let fail = snap.blocks.iter().find(|b| b.info.command.as_deref() == Some("false")).expect("bloque false");
+    assert!(fail.info.failed());
+    std::fs::remove_dir_all(user).ok();
+}

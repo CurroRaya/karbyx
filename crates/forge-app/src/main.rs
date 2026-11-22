@@ -47,6 +47,40 @@ fn ai_command(cmd: &str) -> String {
     )
 }
 
+/// Comando de una sesión de asistente que arranca con una pregunta inicial
+/// leída de `prompt` (un archivo, para no tener problemas de comillas).
+fn ai_command_with_prompt(p: Provider, prompt: &std::path::Path) -> String {
+    let file = prompt.to_string_lossy().replace('\'', "'\\''");
+    let ask = match p {
+        Provider::Gemini => format!("gemini -i \"$(cat '{file}')\""),
+        _ => format!("{} \"$(cat '{file}')\"", p.command()),
+    };
+    let cmd = p.command();
+    format!(
+        "if command -v {cmd} >/dev/null 2>&1; then {ask}; \
+         else printf '\\033[33mNo encuentro el comando {cmd} en el PATH.\\033[0m\\n'; fi; exec \"$SHELL\" -l"
+    )
+}
+
+/// Texto de la pregunta a la IA sobre un comando fallido.
+fn ask_prompt(text: &forge_term::BlockText, cwd: Option<&std::path::Path>) -> String {
+    let cmd = text.command.as_deref().unwrap_or("(comando desconocido)");
+    let exit = text.exit.map(|c| format!(" con código {c}")).unwrap_or_default();
+    let place = cwd.map(|p| format!(" en {}", p.display())).unwrap_or_default();
+    let output = if text.output.is_empty() { "(sin salida)".to_string() } else { text.output.clone() };
+    format!(
+        "Este comando ha fallado{exit} en mi terminal{place}:\n\n$ {cmd}\n\nSalida:\n```\n{output}\n```\n\n\
+         ¿Qué ha pasado y cómo lo arreglo?"
+    )
+}
+
+/// Aviso del sistema (Centro de notificaciones de macOS).
+fn notify(title: &str, body: &str) {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!("display notification \"{}\" with title \"{}\"", esc(body), esc(title));
+    let _ = std::process::Command::new("osascript").arg("-e").arg(script).spawn();
+}
+
 /// Mide las fases de un frame y avisa si es lento (>= 25 ms).
 struct Profiler {
     start: Instant,
@@ -200,6 +234,11 @@ struct App {
     drag: Option<Drag>,
     last_click: Option<LastClick>,
     search: Option<SearchUi>,
+    /// Bloque seleccionado (panel, bloque) y bloque bajo el ratón.
+    selected_block: Option<(PaneId, u64)>,
+    hover_block: Option<(PaneId, u64)>,
+    /// Bloques visibles por panel en el último frame: (id, primera fila, última).
+    pane_blocks: HashMap<PaneId, Vec<(u64, usize, usize)>>,
     info_refreshed: Instant,
     /// Momento de arranque, para el modo captura.
     started: Instant,
@@ -242,6 +281,9 @@ impl App {
             drag: None,
             last_click: None,
             search: None,
+            selected_block: None,
+            hover_block: None,
+            pane_blocks: HashMap::new(),
             info_refreshed: Instant::now(),
             started: Instant::now(),
             occluded: false,
@@ -353,6 +395,10 @@ impl App {
     }
 
     fn spawn_pane(&mut self, kind: PaneKind, area: Area) -> Option<PaneId> {
+        self.spawn_pane_with(kind, area, None)
+    }
+
+    fn spawn_pane_with(&mut self, kind: PaneKind, area: Area, prompt: Option<PathBuf>) -> Option<PaneId> {
         let gfx = self.gfx.as_ref()?;
         let size = gfx.grid_size(area);
         // `FORGE_CAPTURE_AI`: pestaña de IA de prueba con una shell normal dentro
@@ -362,7 +408,11 @@ impl App {
             PaneKind::Ai(_) if dry => None,
             PaneKind::Ai(p) => {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-                Some((shell, vec!["-l".into(), "-i".into(), "-c".into(), ai_command(p.command())]))
+                let cmd = match &prompt {
+                    Some(file) => ai_command_with_prompt(p, file),
+                    None => ai_command(p.command()),
+                };
+                Some((shell, vec!["-l".into(), "-i".into(), "-c".into(), cmd]))
             }
             PaneKind::Shell => None,
         };
@@ -370,6 +420,7 @@ impl App {
             cwd: self.new_session_cwd(),
             command,
             scrollback: Some(self.config.terminal.scrollback),
+            shell_integration: self.config.terminal.shell_integration,
             ..Default::default()
         };
         match Session::spawn(opts, size, self.theme.clone(), self.waker()) {
@@ -398,15 +449,18 @@ impl App {
     }
 
     fn split(&mut self, dir: SplitDir) {
+        self.split_with(dir, PaneKind::Shell, None);
+    }
+
+    fn split_with(&mut self, dir: SplitDir, kind: PaneKind, prompt: Option<PathBuf>) {
         let Some(focus) = self.focused_id() else { return };
-        // El panel nuevo hereda el tipo del actual solo si es una shell.
         let area = self.pane_areas.iter().find(|(id, _)| *id == focus).map(|(_, a)| *a);
         let Some(area) = area.or_else(|| self.layout().map(|l| l.term)) else { return };
         let half = match dir {
             SplitDir::Horizontal => Area::new(area.x, area.y, area.w / 2.0, area.h),
             SplitDir::Vertical => Area::new(area.x, area.y, area.w, area.h / 2.0),
         };
-        let Some(id) = self.spawn_pane(PaneKind::Shell, half) else { return };
+        let Some(id) = self.spawn_pane_with(kind, half, prompt) else { return };
         if let Some(t) = self.tabs.get_mut(self.active) {
             t.root.split(focus, id, dir);
         }
@@ -498,7 +552,49 @@ impl App {
                     p.session.paste(&t);
                 }
             }
+            Action::BlockPrev | Action::BlockNext => {
+                if let Some(focus) = self.focused_id()
+                    && let Some(p) = self.panes.get(&focus)
+                {
+                    let cur = self.selected_block.filter(|(pid, _)| *pid == focus).map(|(_, b)| b);
+                    let up = action == Action::BlockPrev;
+                    // El último bloque es el prompt actual: bajar hasta él quita la selección.
+                    let prompt = p.session.snapshot().blocks.last().map(|b| b.id);
+                    match p.session.jump_block(cur, up) {
+                        Some(b) if !up && Some(b) == prompt => self.selected_block = None,
+                        Some(b) => self.selected_block = Some((focus, b)),
+                        None => {}
+                    }
+                }
+            }
+            Action::AskAi => {
+                let target = self.selected_block.or_else(|| {
+                    let focus = self.focused_id()?;
+                    let snap = self.panes.get(&focus)?.session.snapshot();
+                    snap.blocks.iter().rev().find(|b| b.info.failed()).map(|b| (focus, b.id))
+                });
+                if let Some((pane, block)) = target {
+                    self.ask_ai(pane, block);
+                }
+            }
             Action::Copy => {
+                // Sin texto seleccionado, ⌘C copia el bloque seleccionado.
+                let has_text = self.focused_pane().and_then(|p| p.session.selection_text()).is_some();
+                if !has_text
+                    && let Some((pane, block)) = self.selected_block
+                    && let Some(t) = self.panes.get(&pane).and_then(|p| p.session.block_text(block))
+                {
+                    let mut out = String::new();
+                    if let Some(c) = &t.command {
+                        out.push_str(&format!("$ {c}\n"));
+                    }
+                    out.push_str(&t.output);
+                    if let Some(c) = self.clipboard.as_mut() {
+                        let _ = c.set_text(out);
+                    }
+                    self.redraw();
+                    return;
+                }
                 let text = self.focused_pane().and_then(|p| p.session.selection_text());
                 if let (Some(t), Some(c)) = (text, self.clipboard.as_mut()) {
                     let _ = c.set_text(t);
@@ -584,8 +680,32 @@ impl App {
                 }
             }
             Hit::Provider(i) => self.usage_sel = i,
+            Hit::AskAi(pane, block) => self.ask_ai(pane, block),
         }
         self.redraw();
+    }
+
+    /// Abre a la derecha una sesión del asistente con la pregunta sobre el bloque.
+    fn ask_ai(&mut self, pane: PaneId, block: u64) {
+        let Some(p) = self.panes.get(&pane) else { return };
+        let Some(text) = p.session.block_text(block) else { return };
+        let prompt = ask_prompt(&text, p.info.cwd.as_deref());
+        let provider = self.selected_provider().unwrap_or(Provider::Claude);
+        let Some(dir) = dirs::cache_dir().map(|d| d.join("forge").join("prompts")) else { return };
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let file = dir.join(format!("bloque-{}-{pane}-{block}.txt", std::process::id()));
+        if std::fs::write(&file, prompt).is_err() {
+            return;
+        }
+        self.set_focus(pane);
+        self.split_with(SplitDir::Horizontal, PaneKind::Ai(provider), Some(file));
+    }
+
+    /// Bloque bajo una fila de un panel (según el último frame).
+    fn block_at(&self, pane: PaneId, row: usize) -> Option<u64> {
+        self.pane_blocks.get(&pane)?.iter().find(|(_, a, b)| (*a..=*b).contains(&row)).map(|(id, _, _)| *id)
     }
 
     fn pane_at(&self, x: f32, y: f32) -> Option<(PaneId, Area)> {
@@ -637,6 +757,16 @@ impl App {
         }
         let Some((id, area)) = self.pane_at(x, y) else { return };
         self.set_focus(id);
+        if button == MouseButton::Left
+            && let Some(gfx) = &self.gfx
+            && x < area.x + gfx.metrics.pad
+            && let Some((row, _, _)) = self.cell_under(id, area)
+        {
+            let hit = self.block_at(id, row).map(|b| (id, b));
+            self.selected_block = if self.selected_block == hit { None } else { hit };
+            self.redraw();
+            return;
+        }
         let tb = match button {
             MouseButton::Left => TermButton::Left,
             MouseButton::Middle => TermButton::Middle,
@@ -732,6 +862,16 @@ impl App {
             None => {}
         }
 
+        // Bloque bajo el ratón (para mostrar el botón de IA).
+        let hb = self
+            .pane_at(x, y)
+            .and_then(|(id, area)| Some((id, self.cell_under(id, area)?.0)))
+            .and_then(|(id, row)| Some((id, self.block_at(id, row)?)));
+        if hb != self.hover_block {
+            self.hover_block = hb;
+            self.redraw();
+        }
+
         // Hover de la UI y forma del cursor.
         let hover = ui::hit_at(&self.hits, x, y);
         if hover != self.hover {
@@ -807,6 +947,7 @@ impl App {
     /// pueden necesitar respuestas) y retira las que terminaron.
     fn pump_sessions(&mut self, event_loop: &ActiveEventLoop) {
         let mut exited = Vec::new();
+        let mut finished = Vec::new();
         for (id, pane) in &self.panes {
             for ev in pane.session.poll_events() {
                 match ev {
@@ -821,12 +962,31 @@ impl App {
                             g.window.request_user_attention(None);
                         }
                     }
+                    TermEvent::CommandFinished { exit, duration, command, .. } => {
+                        finished.push((*id, exit, duration, command));
+                    }
                     TermEvent::Title(_) | TermEvent::ResetTitle => {}
                 }
             }
         }
         for id in exited {
             self.remove_pane(id, event_loop);
+        }
+        let min = self.config.terminal.notify_after_secs;
+        for (pane, exit, duration, command) in finished {
+            let visible = self.tabs.get(self.active).is_some_and(|t| t.root.contains(pane));
+            if min == 0 || duration.as_secs() < min || (self.focused && visible) {
+                continue;
+            }
+            let cmd = command.unwrap_or_else(|| "comando".into());
+            let body = match exit {
+                Some(0) | None => format!("✓ {cmd} · {}", ui::fmt_duration(duration)),
+                Some(c) => format!("✗ {cmd} falló (código {c}) · {}", ui::fmt_duration(duration)),
+            };
+            notify("forge", &body);
+            if let Some(g) = &self.gfx {
+                g.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
+            }
         }
         if self.info_refreshed.elapsed() > Duration::from_millis(800) {
             for pane in self.panes.values_mut() {
@@ -870,9 +1030,13 @@ impl App {
                 self.pending_provider = tab_ai;
             }
         }
+        let ask_provider = Some(self.selected_provider().unwrap_or(Provider::Claude));
         let Some(gfx) = &mut self.gfx else { return };
         let scale = gfx.scale();
         let tab = &self.tabs[self.active];
+        let mut deco = Ui::new(scale);
+        let mut overlay = Ui::new(scale);
+        let mut pane_blocks = HashMap::new();
 
         // Geometría de los paneles de la pestaña activa.
         let gap = scale.round().max(1.0);
@@ -898,6 +1062,23 @@ impl App {
             rects.extend(gfx::terminal_rects(&snap, &self.theme, &m, ox, oy, cursor));
             gfx.prepare_rows(*id, &snap);
             texts.push(PaneText { pane: *id, ox, oy, clip: *area });
+            let pick = |b: Option<(PaneId, u64)>| b.filter(|(p, _)| p == id).map(|(_, b)| b);
+            ui::draw_blocks(
+                &mut deco,
+                &mut overlay,
+                &ui::BlockCtx {
+                    pane: *id,
+                    area: *area,
+                    origin: (ox, oy),
+                    cell: (m.cell_w, m.cell_h),
+                    snap: &snap,
+                    selected: pick(self.selected_block),
+                    hovered: pick(self.hover_block),
+                    ai: ask_provider,
+                },
+            );
+            pane_blocks
+                .insert(*id, snap.blocks.iter().map(|b| (b.id, b.first_row, b.last_row)).collect::<Vec<_>>());
             if snap.display_offset > 0 {
                 let w = 160.0 * scale;
                 labels.push(Label {
@@ -912,6 +1093,9 @@ impl App {
             }
         }
         prof.mark("panes");
+        rects.append(&mut deco.rects);
+        labels.append(&mut deco.labels);
+        self.pane_blocks = pane_blocks;
         for d in &dividers {
             rects.push(Rect {
                 pos: [d.line.x, d.line.y],
@@ -956,7 +1140,6 @@ impl App {
         if let Some(area) = layout.right {
             ui::draw_right(&mut ui, area, &usage, self.usage_sel, self.hover, Utc::now());
         }
-        let mut overlay = Ui::new(scale);
         if let Some(s) = &self.search
             && let Some((_, area)) = pane_areas.iter().find(|(id, _)| *id == tab.focus)
         {
@@ -964,12 +1147,35 @@ impl App {
         }
         rects.extend(ui.rects.iter().copied());
         labels.append(&mut ui.labels);
-        self.hits = std::mem::take(&mut ui.hits);
+        // Prioridad de clic: capa superpuesta, luego paneles laterales.
+        let mut hits = std::mem::take(&mut overlay.hits);
+        hits.append(&mut ui.hits);
+        self.hits = hits;
         self.pane_areas = pane_areas;
         self.dividers = dividers;
 
         // Captura (modo desarrollo) cuando la shell ya ha pintado.
-        let capture = capture::target().filter(|_| self.started.elapsed() > Duration::from_secs(4));
+        let capture = capture::target().filter(|_| self.started.elapsed() > capture::delay());
+        // `FORGE_CAPTURE_SELECT`: selecciona el último bloque fallido antes de capturar.
+        if capture::target().is_some()
+            && self.selected_block.is_none()
+            && std::env::var_os("FORGE_CAPTURE_SELECT").is_some()
+            && let Some(start) = self.started.elapsed().checked_sub(Duration::from_millis(500))
+            && start + Duration::from_millis(500)
+                > capture::delay().saturating_sub(Duration::from_millis(400))
+        {
+            let focus = self.tabs[self.active].focus;
+            if let Some((id, _, _)) = self.pane_blocks.get(&focus).and_then(|v| {
+                v.iter().rev().find(|(id, _, _)| {
+                    self.panes
+                        .get(&focus)
+                        .and_then(|p| p.session.block_text(*id))
+                        .is_some_and(|t| t.exit.is_some_and(|c| c != 0))
+                })
+            }) {
+                self.selected_block = Some((focus, *id));
+            }
+        }
         // `FORGE_SEARCH=texto` abre la búsqueda en modo captura, para verla.
         if capture::target().is_some()
             && self.search.is_none()
@@ -1045,6 +1251,19 @@ impl ApplicationHandler<UserEvent> for App {
         if std::env::var_os("FORGE_SELFTEST").is_some() {
             spawn_selftest(self.proxy.clone());
         }
+        // `FORGE_TYPE="cmd1\ncmd2\n"`: en modo captura, teclea esos comandos al arrancar.
+        if capture::target().is_some()
+            && let Ok(text) = std::env::var("FORGE_TYPE")
+        {
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                for line in text.split('\n').filter(|l| !l.is_empty()) {
+                    let _ = proxy.send_event(UserEvent::Type(format!("{line}\r")));
+                    std::thread::sleep(Duration::from_millis(700));
+                }
+            });
+        }
         window.request_redraw();
     }
 
@@ -1097,21 +1316,29 @@ impl ApplicationHandler<UserEvent> for App {
                     self.handle_action(a, event_loop);
                     return;
                 }
+                if self.selected_block.is_some() && event.logical_key == Key::Named(NamedKey::Escape) {
+                    self.selected_block = None;
+                    self.redraw();
+                    return;
+                }
                 if self.search.is_some() && self.search_key(&event) {
                     return;
                 }
-                let Some(pane) = self.focused_pane() else { return };
+                let Some(mode) = self.focused_pane().map(|p| p.session.mode()) else { return };
                 let outcome = input::translate(
                     &event,
                     self.mods,
-                    pane.session.mode(),
+                    mode,
                     &self.bindings,
                     self.config.terminal.option_as_alt,
                 );
                 match outcome {
                     KeyOutcome::Bytes(b) => {
-                        pane.session.clear_selection();
-                        pane.session.write(b);
+                        self.selected_block = None;
+                        if let Some(pane) = self.focused_pane() {
+                            pane.session.clear_selection();
+                            pane.session.write(b);
+                        }
                     }
                     KeyOutcome::Action(a) => self.handle_action(a, event_loop),
                     KeyOutcome::None => {}
@@ -1156,6 +1383,38 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_prompt_includes_command_output_and_code() {
+        let t = forge_term::BlockText {
+            command: Some("cargo build".into()),
+            output: "error[E0308]: mismatched types".into(),
+            exit: Some(101),
+        };
+        let p = ask_prompt(&t, Some(std::path::Path::new("/Users/x/proyecto")));
+        assert!(p.contains("$ cargo build"));
+        assert!(p.contains("error[E0308]"));
+        assert!(p.contains("código 101"));
+        assert!(p.contains("/Users/x/proyecto"));
+        let vacio = ask_prompt(&forge_term::BlockText::default(), None);
+        assert!(vacio.contains("(sin salida)"));
+    }
+
+    #[test]
+    fn ai_command_quotes_prompt_path() {
+        let path = std::path::Path::new("/tmp/it's here/p.txt");
+        let c = ai_command_with_prompt(Provider::Claude, path);
+        assert!(c.contains(r#"claude "$(cat '/tmp/it'\''s here/p.txt')""#), "{c}");
+        let g = ai_command_with_prompt(Provider::Gemini, path);
+        assert!(g.contains("gemini -i"), "{g}");
+        // Comprobado con sh: la comilla del nombre no rompe el comando.
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("printf %s '{}'", path.to_string_lossy().replace('\'', "'\\''")))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), path.to_string_lossy());
+    }
 
     #[test]
     fn usage_panel_visibility() {

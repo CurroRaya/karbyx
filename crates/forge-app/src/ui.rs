@@ -108,6 +108,8 @@ pub enum Hit {
     NewAi,
     /// Pestaña de proveedor en la cabecera del panel derecho.
     Provider(usize),
+    /// Preguntar a la IA por un bloque fallido: (panel, bloque).
+    AskAi(u64, u64),
 }
 
 /// Color de cada asistente.
@@ -132,8 +134,13 @@ impl Ui {
         Self { scale, ..Default::default() }
     }
 
-    fn s(&self, v: f32) -> f32 {
+    pub fn s(&self, v: f32) -> f32 {
         (v * self.scale).round()
+    }
+
+    /// Rectángulo semitransparente.
+    pub fn tint(&mut self, a: Area, color: Rgb, alpha: f32) {
+        self.rects.push(Rect { pos: [a.x, a.y], size: [a.w, a.h], color: linear(color, alpha) });
     }
 
     pub fn fill(&mut self, a: Area, color: Rgb) {
@@ -141,7 +148,7 @@ impl Ui {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn text(
+    pub fn text(
         &mut self,
         text: impl Into<String>,
         x: f32,
@@ -164,7 +171,7 @@ impl Ui {
         });
     }
 
-    fn hit(&mut self, a: Area, h: Hit) {
+    pub fn hit(&mut self, a: Area, h: Hit) {
         self.hits.push((a, h));
     }
 
@@ -592,6 +599,137 @@ pub fn draw_search(ui: &mut Ui, pane: Area, query: &str, found: bool) {
     ui.text(shown, bx.x + ui.s(30.0), bx.y + ui.s(8.0), bx.w - ui.s(130.0), 13.0, qcolor, false, Align::Left);
     let hint = if !query.is_empty() && !found { "sin resultados" } else { "↵ ↑  ⇧↵ ↓  esc" };
     ui.text(hint, bx.x, bx.y + ui.s(10.0), bx.w - ui.s(10.0), 10.5, DIM, false, Align::Right);
+}
+
+/// "320 ms", "2,4 s", "1 min 05 s".
+pub fn fmt_duration(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    match ms {
+        0..=999 => format!("{ms} ms"),
+        1000..=59_999 => format!("{:.1} s", ms as f64 / 1000.0).replace('.', ","),
+        _ => format!("{} min {:02} s", ms / 60_000, (ms / 1000) % 60),
+    }
+}
+
+/// Datos de un panel necesarios para pintar sus bloques.
+pub struct BlockCtx<'a> {
+    pub pane: u64,
+    pub area: Area,
+    pub origin: (f32, f32),
+    pub cell: (f32, f32),
+    pub snap: &'a forge_term::Snapshot,
+    pub selected: Option<u64>,
+    pub hovered: Option<u64>,
+    pub ai: Option<Provider>,
+}
+
+/// Decoración de los bloques de un panel: separadores, barra de estado,
+/// tinte de fallos y selección, etiqueta de duración y botón de IA.
+pub fn draw_blocks(base: &mut Ui, overlay: &mut Ui, c: &BlockCtx) {
+    let (ox, oy) = c.origin;
+    let (cw, ch) = c.cell;
+    let snap = c.snap;
+    for b in &snap.blocks {
+        let top = oy + b.first_row as f32 * ch;
+        let h = (b.last_row - b.first_row + 1) as f32 * ch;
+        let rows = Area::new(c.area.x, top, c.area.w, h);
+        let selected = c.selected == Some(b.id);
+        let failed = b.info.failed();
+
+        if b.starts_here && b.first_row > 0 {
+            base.fill(Area::new(c.area.x + base.s(6.0), top, c.area.w - base.s(12.0), 1.0), BORDER);
+        }
+        if selected {
+            base.tint(rows, ACCENT, 0.10);
+        } else if failed {
+            base.tint(rows, RED, 0.06);
+        }
+        let bar = if selected {
+            Some(ACCENT)
+        } else if failed {
+            Some(RED)
+        } else if b.info.running() {
+            Some(YELLOW)
+        } else {
+            None
+        };
+        if let Some(col) = bar {
+            base.fill(Area::new(c.area.x + base.s(3.0), top + 2.0, base.s(3.0), h - 4.0), col);
+        }
+
+        if !b.starts_here {
+            continue;
+        }
+        // Etiqueta a la derecha de la primera fila, si hay hueco libre.
+        // Etiqueta a la derecha de la primera fila: versión larga si cabe, si no corta.
+        let labels: Vec<(String, Rgb)> = if b.info.running() {
+            vec![("● en curso".into(), YELLOW), ("●".into(), YELLOW)]
+        } else if let Some(d) = b.info.duration() {
+            let code = b.info.exit.unwrap_or(0);
+            if failed {
+                vec![
+                    (format!("✗ código {code} · {}", fmt_duration(d)), RED),
+                    (format!("✗ {code} · {}", fmt_duration(d)), RED),
+                    (format!("✗ {code}"), RED),
+                ]
+            } else if d.as_millis() >= 500 {
+                vec![(format!("✓ {}", fmt_duration(d)), DIM)]
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let free_at = |r: usize| snap.row(r).iter().rev().take_while(|x| x.c == ' ' || x.c == '\0').count();
+        let free = free_at(b.first_row);
+        if let Some((text, color)) = labels.into_iter().find(|(t, _)| free >= t.chars().count() + 3) {
+            let need = text.chars().count() + 3;
+            let w = need as f32 * cw;
+            let x = ox + snap.cols as f32 * cw - w;
+            base.text(
+                text,
+                x,
+                top + (ch - base.s(16.0)) / 2.0,
+                w - base.s(4.0),
+                11.0,
+                color,
+                false,
+                Align::Right,
+            );
+        }
+        // Botón de IA en los bloques fallidos (al pasar el ratón o seleccionados):
+        // en la última fila del bloque con hueco a la derecha, para no tapar texto.
+        if failed
+            && (selected || c.hovered == Some(b.id))
+            && let Some(p) = c.ai
+        {
+            let text = format!("◆ Preguntar a {}", p.name());
+            let bw = overlay.s(170.0);
+            let bh = (ch - 2.0).min(overlay.s(24.0));
+            let need = (bw / cw).ceil() as usize + 3;
+            let first_out = b.output_row.unwrap_or(b.first_row);
+            let row = (first_out..=b.last_row)
+                .rev()
+                .find(|r| *r != b.first_row && free_at(*r) >= need)
+                .or_else(|| (free_at(b.first_row) >= need + 20).then_some(b.first_row))
+                .unwrap_or(b.last_row);
+            let y = oy + row as f32 * ch + (ch - bh) / 2.0;
+            let btn = Area::new(c.area.right() - bw - overlay.s(14.0), y, bw, bh);
+            overlay.fill(Area::new(btn.x - 1.0, btn.y - 1.0, btn.w + 2.0, btn.h + 2.0), accent(p));
+            overlay.fill(btn, PANEL_BG);
+            overlay.text(
+                text,
+                btn.x,
+                btn.y + (bh - overlay.s(17.0)) / 2.0,
+                btn.w,
+                11.5,
+                accent(p),
+                true,
+                Align::Center,
+            );
+            overlay.hit(btn, Hit::AskAi(c.pane, b.id));
+        }
+    }
 }
 
 fn week_limit(ui: &mut Ui, l: &LimitView, x: f32, y: &mut f32, w: f32) {
