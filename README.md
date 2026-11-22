@@ -3,7 +3,106 @@
 Terminal para macOS escrita en Rust que une lo mejor de iTerm2 y Warp, con el
 consumo de tus asistentes de IA (Claude Code, Codex CLI, Gemini CLI) integrado.
 
-## Estado
+## Requisitos
+
+- **macOS** (probado en macOS 27). Linux y Windows aún no están soportados.
+- **Herramientas de línea de comandos de Xcode** (el enlazador que usa Rust):
+
+  ```bash
+  xcode-select --install
+  ```
+
+- **Rust 1.88 o superior** (se usa la edición 2024). Si no lo tienes, la forma
+  recomendada es [rustup](https://rustup.rs):
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+  O con Homebrew:
+
+  ```bash
+  brew install rustup && rustup default stable
+  ```
+
+  Homebrew instala rustup sin enlazarlo al sistema, así que hay que añadirlo
+  al `PATH` (y `~/.cargo/bin`, donde se instalan los programas de Rust):
+
+  ```bash
+  echo 'export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+  ```
+
+- **Opcional:** [Claude Code](https://claude.com/claude-code), Codex CLI o
+  Gemini CLI para las sesiones de IA y el panel de consumo.
+
+## Instalación
+
+```bash
+git clone https://github.com/CurroRaya/forge_term.git
+cd forge_term
+cargo install --path crates/forge-app      # la terminal  → ~/.cargo/bin/forge-app
+cargo install --path crates/forge-usage    # CLI de consumo → ~/.cargo/bin/forge-usage
+```
+
+La primera compilación tarda unos minutos; las siguientes, segundos.
+
+## Ejecutar
+
+Una vez instalado, desde cualquier terminal:
+
+```bash
+forge-app                 # abre forge
+forge-usage               # resumen de consumo de tus asistentes
+forge-usage watch         # consumo en directo
+forge-usage -p claude daily
+```
+
+Sin instalar, desde la carpeta del proyecto:
+
+```bash
+cargo run --release -p forge-app
+cargo run --release -p forge-usage -- watch
+```
+
+Por ahora forge no se distribuye como aplicación `.app`, así que se lanza
+desde una terminal. Si quieres poder cerrar esa terminal sin que se cierre
+forge, lánzalo desvinculado:
+
+```bash
+forge-app &!
+```
+
+## Actualizar
+
+```bash
+cd forge_term
+git pull
+cargo install --path crates/forge-app
+cargo install --path crates/forge-usage
+```
+
+## Desinstalar
+
+```bash
+cargo uninstall forge-app forge-usage
+rm -rf ~/.config/forge ~/Library/Caches/forge   # configuración y caché (opcional)
+```
+
+forge no modifica tu `.zshrc` ni ningún archivo tuyo: la integración con zsh
+vive en `~/Library/Caches/forge` y desaparece con ella.
+
+## Solución de problemas
+
+| Problema | Solución |
+|---|---|
+| `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
+| `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
+| `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
+| No aparecen los bloques de comandos | Solo funcionan con zsh y la integración activa (`shell_integration = true`). Abre una pestaña nueva tras cambiarlo. |
+| El panel de consumo no sale | Aparece solo en pestañas con una sesión de IA; fuérzalo con ⌘⌥B. |
+| Va lento o quieres medirlo | `FORGE_PROFILE=1 forge-app` muestra el tiempo de cada frame. |
+
+## Estructura del proyecto
 
 | Crate | Qué hace |
 |---|---|
@@ -13,12 +112,6 @@ consumo de tus asistentes de IA (Claude Code, Codex CLI, Gemini CLI) integrado.
 | `forge-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
 
 ## Uso
-
-```bash
-cargo run --release -p forge-app          # la terminal
-cargo run --release -p forge-usage        # resumen de consumo
-cargo run --release -p forge-usage -- watch
-```
 
 ### Atajos
 
