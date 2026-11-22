@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Escaneo incremental del historial de los asistentes.
 //!
 //! Recuerda cuánto ha leído de cada archivo, así que llamar a [`Scanner::scan`]

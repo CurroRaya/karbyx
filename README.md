@@ -3,6 +3,12 @@
 Terminal para macOS escrita en Rust que une lo mejor de iTerm2 y Warp, con el
 consumo de tus asistentes de IA (Claude Code, Codex CLI, Gemini CLI) integrado.
 
+[![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
+
+forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
+Las versiones modificadas que se distribuyan deben publicar su código con la
+misma licencia, para que todas las mejoras sigan siendo de todos.
+
 ## Requisitos
 
 - **macOS** (probado en macOS 27). Linux y Windows aún no están soportados.
@@ -226,3 +232,23 @@ FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra c
 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
 FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
 ```
+
+## Contribuir
+
+Las contribuciones son bienvenidas: fallos, ideas, documentación o código.
+Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir un *pull request*.
+
+## Licencia
+
+Copyright (C) 2026 CurroRaya y los colaboradores de forge.
+
+Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+los términos de la **Licencia Pública General de GNU** publicada por la Free
+Software Foundation, ya sea la versión 3 de la licencia o (a tu elección)
+cualquier versión posterior.
+
+Se distribuye con la esperanza de que sea útil, pero **SIN NINGUNA
+GARANTÍA**; ni siquiera la garantía implícita de COMERCIABILIDAD o IDONEIDAD
+PARA UN PROPÓSITO PARTICULAR. Consulta el archivo [LICENSE](LICENSE) para más
+detalles.
+

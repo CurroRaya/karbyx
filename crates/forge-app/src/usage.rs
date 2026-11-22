@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Hilo en segundo plano que mantiene actualizado el consumo de los
 //! asistentes de IA para el panel derecho. Solo tokens y tiempos: sin importes.
 

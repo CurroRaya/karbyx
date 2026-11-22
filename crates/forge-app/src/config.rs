@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Configuración de la terminal: `~/.config/forge/forge.toml`.
 //!
 //! ```toml

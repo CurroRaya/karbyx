@@ -5,7 +5,9 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/CurroRaya/forge_term"
+authors = ["CurroRaya y los colaboradores de forge"]
 
 [profile.release]
 lto = "thin"

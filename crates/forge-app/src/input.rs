@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Traducción de teclas de winit a secuencias de bytes para la shell.
 
 use forge_term::TermMode;

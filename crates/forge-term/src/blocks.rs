@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Bloques estilo Warp: cada comando con su salida es una unidad.
 //!
 //! La shell marca las fases con secuencias OSC 133 (estándar FinalTerm):

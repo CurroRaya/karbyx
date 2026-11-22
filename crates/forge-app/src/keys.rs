@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Atajos de teclado: combinaciones legibles (`"cmd+shift+d"`) asociadas a
 //! acciones, con valores por defecto que `[keys]` de `forge.toml` puede cambiar.
 

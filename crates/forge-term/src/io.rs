@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! E/S del PTY: hilo lector (parser VT + marcas de bloque) y hilo escritor.
 //!
 //! Sustituye al `EventLoop` de alacritty para poder aplicar las marcas OSC 133

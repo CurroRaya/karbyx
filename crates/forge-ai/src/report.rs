@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Agregaciones sobre los registros de uso: totales, días, modelos, proyectos,
 //! ventanas de 5 horas y semana en curso, con estimación de lo que queda.
 

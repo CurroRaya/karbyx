@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Información del proceso que corre en el PTY: nombre del proceso en primer
 //! plano y su directorio de trabajo. Sirve para titular las sesiones
 //! ("nvim · ~/Rust/forge") sin depender de que la shell envíe secuencias OSC.

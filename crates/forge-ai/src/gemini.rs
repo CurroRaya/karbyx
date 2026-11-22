@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Gemini CLI (Google): historial en `~/.gemini/tmp/<proyecto>/chats/session-*.json`.
 //!
 //! Cada archivo es un JSON completo con `sessionId` y una lista `messages`;

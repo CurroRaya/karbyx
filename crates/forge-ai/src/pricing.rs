@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Tabla de precios (USD por millón de tokens) para estimar el coste.
 //!
 //! Si usas una suscripción (Pro/Max), el coste es el *equivalente en API*: lo

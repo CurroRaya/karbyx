@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Claude Code: parser tolerante de las líneas JSONL de `~/.claude/projects`.
 //!
 //! El formato no es una API pública y evoluciona entre versiones, así que todo

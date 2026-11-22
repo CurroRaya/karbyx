@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Codex CLI (OpenAI): historial en `~/.codex/sessions/AAAA/MM/DD/rollout-*.jsonl`.
 //!
 //! Cada archivo es una sesión. Las líneas relevantes:

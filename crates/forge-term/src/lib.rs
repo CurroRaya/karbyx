@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! `forge-term`: sesión de terminal (PTY + emulador VT) independiente de la UI.
 //!
 //! Envuelve `alacritty_terminal`: arranca la shell en un PTY, procesa la salida

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Todo lo que toca la GPU: superficie wgpu, texto (glyphon) con caché por
 //! fila y por etiqueta, y presentación del frame.
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Herramienta de desarrollo: vuelca un frame renderizado a PNG.
 //!
 //! `FORGE_SCREENSHOT=/ruta/salida.png forge-app` guarda el frame cuando la

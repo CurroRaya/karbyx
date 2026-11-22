@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! `forge`: terminal acelerada por GPU con sesiones en una barra lateral,
 //! paneles divididos y el consumo de los asistentes de IA en un panel derecho.
 

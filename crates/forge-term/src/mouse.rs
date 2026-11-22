@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Codificación de eventos de ratón para aplicaciones que los piden (vim,
 //! htop, tmux...): protocolos SGR (1006), UTF-8 (1005) y X10 clásico.
 

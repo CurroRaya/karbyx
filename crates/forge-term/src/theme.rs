@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+
 //! Paleta de colores y resolución de colores ANSI a RGB.
 
 use alacritty_terminal::term::color::Colors;
