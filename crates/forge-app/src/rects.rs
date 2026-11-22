@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
 //! Pipeline wgpu para rectángulos de color (fondos de celda, cursor,
 //! subrayados, barra de estado). Un único draw instanciado por frame.

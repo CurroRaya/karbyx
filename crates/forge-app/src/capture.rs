@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
 //! Herramienta de desarrollo: vuelca un frame renderizado a PNG.
 //!

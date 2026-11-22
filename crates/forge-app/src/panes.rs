@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
 //! Árbol de paneles de una pestaña: cada hoja es una sesión de terminal y
 //! cada nodo interno divide su área en dos (lado a lado o arriba/abajo).

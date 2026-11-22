@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/CurroRaya/forge_term"
-authors = ["CurroRaya y los colaboradores de forge"]
+authors = ["Francisco José Raya García (Curro)"]
 
 [profile.release]
 lto = "thin"

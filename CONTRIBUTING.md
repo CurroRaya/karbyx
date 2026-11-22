@@ -34,7 +34,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 
   ```rust
   // SPDX-License-Identifier: GPL-3.0-or-later
-  // Copyright (C) 2026 CurroRaya y los colaboradores de forge
+  // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
   ```
 
 - Los cambios de comportamiento llevan tests; si algo no se puede testear

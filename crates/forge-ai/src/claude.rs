@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
 //! Claude Code: parser tolerante de las líneas JSONL de `~/.claude/projects`.
 //!

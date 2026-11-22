@@ -240,7 +240,7 @@ Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir un *pull request*.
 
 ## Licencia
 
-Copyright (C) 2026 CurroRaya y los colaboradores de forge.
+Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge.
 
 Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
 los términos de la **Licencia Pública General de GNU** publicada por la Free

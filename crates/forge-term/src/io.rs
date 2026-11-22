@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 CurroRaya y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
 //! E/S del PTY: hilo lector (parser VT + marcas de bloque) y hilo escritor.
 //!
