@@ -14,7 +14,7 @@ use forge_ai::Provider;
 
 use crate::agents::AgentState;
 
-use crate::usage::{LimitView, UsageState};
+use crate::usage::{DAYS, LimitView, UsageState, UsageView};
 
 pub type Rgb = [u8; 3];
 
@@ -119,6 +119,8 @@ pub enum Hit {
     OpenInbox,
     /// Fila de la bandeja de agentes.
     InboxItem(usize),
+    /// Fila de agente en el panel de mando.
+    DashAgent(usize),
 }
 
 /// Color de cada asistente.
@@ -758,6 +760,370 @@ pub fn draw_right(
         );
     }
     ui.text("⌘⌥B ocultar panel", x, foot, w, 10.0, DIM, false, Align::Left);
+}
+
+// ---------- panel de mando: todos los agentes de un vistazo ----------
+
+const CARD_BG: Rgb = [0x1a, 0x1d, 0x23];
+
+/// Un agente abierto en forge tal como se ve en el panel de mando.
+pub struct DashAgent {
+    pub title: String,
+    pub project: String,
+    pub ai: Option<Provider>,
+    pub state: Option<AgentState>,
+    /// Tokens que lleva su sesión (si se conoce: Claude con hooks).
+    pub tokens: Option<u64>,
+}
+
+/// Porcentaje y texto de la ventana de 5 h de un asistente.
+fn window_line(v: &UsageView, now: DateTime<Utc>) -> (Option<f64>, Rgb, String) {
+    let acc = accent(v.provider);
+    match &v.active {
+        Some(a) => match &a.limit {
+            Some(l) => (
+                Some(l.percent),
+                limit_color(l.percent),
+                format!("{:.0}% · reinicia {}", l.percent, hm(a.end)),
+            ),
+            None => {
+                let total = (a.end - a.start).num_seconds().max(1) as f64;
+                let p = (now - a.start).num_seconds() as f64 * 100.0 / total;
+                (Some(p), acc, format!("{} · quedan {}", tok(a.tokens), dur(a.remaining)))
+            }
+        },
+        None => (None, DIM, "sin actividad".into()),
+    }
+}
+
+/// Porcentaje y texto de la semana: límite propio, oficial o solo tokens.
+fn week_line(v: &UsageView) -> (Option<f64>, String) {
+    if let Some(l) = &v.week_limit {
+        return (Some(l.percent), format!("{:.0}% · {}", l.percent, tok(v.week)));
+    }
+    if let Some(o) = v.official.iter().find(|o| o.label == "semana") {
+        return (Some(o.percent), format!("{:.0}% (oficial)", o.percent));
+    }
+    (None, tok(v.week))
+}
+
+fn provider_card(ui: &mut Ui, card: Area, v: &UsageView, now: DateTime<Utc>) {
+    let acc = accent(v.provider);
+    ui.fill(card, CARD_BG);
+    ui.fill(Area::new(card.x, card.y, card.w, ui.s(2.0)), acc);
+    let x = card.x + ui.s(16.0);
+    let w = card.w - ui.s(32.0);
+    let mut y = card.y + ui.s(14.0);
+
+    ui.text(v.provider.name(), x, y, w, 12.5, acc, true, Align::Left);
+    let (status, color) = match (&v.active, v.has_data) {
+        (_, false) => ("sin historial", DIM),
+        (Some(_), _) => ("● activo", GREEN),
+        (None, _) => ("○ inactivo", DIM),
+    };
+    ui.text(status, x, y, w, 10.5, color, false, Align::Right);
+    y += ui.s(26.0);
+
+    ui.text(tok(v.today), x, y, w, 24.0, TEXT, true, Align::Left);
+    if let Some(l) = ui.labels.last_mut() {
+        l.font = Font::Mono;
+    }
+    y += ui.s(36.0);
+    ui.text(format!("tokens hoy · {} peticiones", v.today_requests), x, y, w, 10.5, DIM, false, Align::Left);
+    y += ui.s(26.0);
+
+    let (pct, color, caption) = window_line(v, now);
+    ui.text("Ventana 5 h", x, y, w, 11.0, DIM, false, Align::Left);
+    ui.text(caption, x, y, w, 11.0, TEXT, false, Align::Right);
+    y += ui.s(18.0);
+    ui.bar(x, y, w, pct.unwrap_or(0.0), color);
+    y += ui.s(16.0);
+
+    let (pct, caption) = week_line(v);
+    ui.text("Semana", x, y, w, 11.0, DIM, false, Align::Left);
+    ui.text(caption, x, y, w, 11.0, TEXT, false, Align::Right);
+    y += ui.s(18.0);
+    if let Some(p) = pct {
+        ui.bar(x, y, w, p, limit_color(p));
+    } else {
+        ui.fill(Area::new(x, y + ui.s(2.0), w, 1.0), TRACK);
+    }
+
+    // Últimas 24 h: una barra por hora.
+    let spark_h = ui.s(32.0);
+    let sy = card.bottom() - ui.s(14.0) - spark_h;
+    ui.text("últimas 24 h", x, sy - ui.s(18.0), w, 9.5, DIM, false, Align::Left);
+    let max = v.hourly.iter().copied().max().unwrap_or(0);
+    ui.text(
+        if max > 0 { format!("máx {}/h", tok(max)) } else { String::new() },
+        x,
+        sy - ui.s(18.0),
+        w,
+        9.5,
+        DIM,
+        false,
+        Align::Right,
+    );
+    let n = v.hourly.len().max(1) as f32;
+    let gap = ui.s(2.0);
+    let bw = ((w - gap * (n - 1.0)) / n).max(1.0);
+    for (i, t) in v.hourly.iter().enumerate() {
+        let bx = x + i as f32 * (bw + gap);
+        let last = i + 1 == v.hourly.len();
+        ui.fill(Area::new(bx, sy + spark_h - 1.0, bw, 1.0), TRACK);
+        if *t > 0 && max > 0 {
+            let bh = (spark_h * *t as f32 / max as f32).max(ui.s(2.0));
+            ui.fill(Area::new(bx, sy + spark_h - bh, bw, bh), if last { acc } else { BAR_IDLE });
+        }
+    }
+}
+
+/// Histórico diario apilado por asistente.
+fn daily_chart(ui: &mut Ui, x: f32, y: f32, w: f32, h: f32, views: &[UsageView], now: DateTime<Utc>) {
+    let totals: Vec<u64> =
+        (0..DAYS).map(|i| views.iter().map(|v| v.daily.get(i).copied().unwrap_or(0)).sum()).collect();
+    let max = totals.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let label_h = ui.s(16.0);
+    let chart_h = h - label_h;
+    let gap = ui.s(5.0);
+    let bw = ((w - gap * (DAYS as f32 - 1.0)) / DAYS as f32).max(2.0);
+    let today = now.with_timezone(&Local).date_naive();
+    for i in 0..DAYS {
+        let bx = x + i as f32 * (bw + gap);
+        ui.fill(Area::new(bx, y + chart_h - 1.0, bw, 1.0), TRACK);
+        let mut top = y + chart_h;
+        for v in views {
+            let t = v.daily.get(i).copied().unwrap_or(0);
+            if t == 0 {
+                continue;
+            }
+            let sh = (chart_h * t as f32 / max).max(ui.s(2.0));
+            top -= sh;
+            ui.fill(Area::new(bx, top, bw, sh), accent(v.provider));
+        }
+        let day = today - Duration::days((DAYS - 1 - i) as i64);
+        let last = i + 1 == DAYS;
+        if last || (DAYS - 1 - i).is_multiple_of(2) {
+            let lbl = if last { "hoy".to_string() } else { day.format("%d").to_string() };
+            ui.text(
+                lbl,
+                bx - ui.s(8.0),
+                y + chart_h + ui.s(3.0),
+                bw + ui.s(16.0),
+                9.5,
+                if last { TEXT } else { DIM },
+                false,
+                Align::Center,
+            );
+        }
+    }
+}
+
+/// Panel de mando (⌘U): consumo de todos los asistentes y agentes abiertos.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_dashboard(
+    ui: &mut Ui,
+    screen: Area,
+    state: &UsageState,
+    agents: &[DashAgent],
+    selected: Option<usize>,
+    tick: u64,
+    hover: Option<Hit>,
+    now: DateTime<Utc>,
+) {
+    ui.tint(screen, [0, 0, 0], 0.55);
+    let margin = ui.s(28.0);
+    let w = (screen.w - 2.0 * margin).min(ui.s(1180.0));
+    let h = screen.h - 2.0 * margin;
+    let bx = Area::new(screen.x + (screen.w - w) / 2.0, screen.y + margin, w, h);
+    ui.fill(Area::new(bx.x - 1.0, bx.y - 1.0, bx.w + 2.0, bx.h + 2.0), BORDER);
+    ui.fill(bx, PANEL_BG);
+
+    let pad = ui.s(24.0);
+    let x = bx.x + pad;
+    let iw = bx.w - 2.0 * pad;
+    let mut y = bx.y + ui.s(20.0);
+
+    // Cabecera.
+    ui.text("PANEL DE MANDO", x, y, iw, 10.5, DIM, true, Align::Left);
+    ui.text("⌘U · esc", x, y, iw, 10.5, DIM, false, Align::Right);
+    y += ui.s(20.0);
+    ui.text("Consumo de tus agentes", x, y, iw, 17.0, TEXT, true, Align::Left);
+    let today: u64 = state.views.iter().map(|v| v.today).sum();
+    let week: u64 = state.views.iter().map(|v| v.week).sum();
+    if state.views.len() > 1 {
+        ui.text(
+            format!("hoy {} · semana {} tokens", tok(today), tok(week)),
+            x,
+            y + ui.s(4.0),
+            iw,
+            12.0,
+            DIM,
+            false,
+            Align::Right,
+        );
+    }
+    y += ui.s(42.0);
+
+    if !state.loaded {
+        ui.text("Leyendo historial…", x, y, iw, 12.5, DIM, false, Align::Left);
+        return;
+    }
+    if state.views.is_empty() {
+        ui.text(
+            "No se ha detectado ningún asistente (Claude Code, Codex CLI, Gemini CLI).",
+            x,
+            y,
+            iw,
+            12.5,
+            DIM,
+            false,
+            Align::Left,
+        );
+        y += ui.s(40.0);
+    } else {
+        let n = state.views.len() as f32;
+        let gap = ui.s(14.0);
+        let cw = ((iw - gap * (n - 1.0)) / n).floor();
+        let ch = ui.s(236.0);
+        for (i, v) in state.views.iter().enumerate() {
+            provider_card(ui, Area::new(x + i as f32 * (cw + gap), y, cw, ch), v, now);
+        }
+        y += ch + ui.s(26.0);
+    }
+
+    // Parte inferior: histórico | agentes y proyectos.
+    let bottom = bx.bottom() - ui.s(40.0);
+    let gap = ui.s(32.0);
+    let lw = ((iw - gap) * 0.5).floor();
+    let rx = x + lw + gap;
+    let rw = iw - lw - gap;
+
+    if !state.views.is_empty() {
+        ui.section(&format!("ÚLTIMOS {DAYS} DÍAS"), "", x, y, lw);
+        // Leyenda.
+        let mut lx = x + lw;
+        for v in state.views.iter().rev() {
+            let lw_ = ui.s(14.0 + 7.0 * v.provider.name().len() as f32);
+            lx -= lw_;
+            ui.text(
+                format!("■ {}", v.provider.name()),
+                lx,
+                y,
+                lw_,
+                10.0,
+                accent(v.provider),
+                false,
+                Align::Left,
+            );
+        }
+        let ch = (bottom - y - ui.s(26.0)).min(ui.s(200.0));
+        if ch > ui.s(40.0) {
+            daily_chart(ui, x, y + ui.s(26.0), lw, ch, &state.views, now);
+        }
+    }
+
+    // Agentes abiertos en forge.
+    let mut ry = y;
+    ui.section("AGENTES EN FORGE", &agents.len().to_string(), rx, ry, rw);
+    ry += ui.s(24.0);
+    if agents.is_empty() {
+        ui.text("Ningún agente abierto · ⌘⇧C para abrir uno", rx, ry, rw, 12.0, DIM, false, Align::Left);
+        ry += ui.s(30.0);
+    }
+    let row_h = ui.s(30.0);
+    let max_rows = 6;
+    for (i, a) in agents.iter().take(max_rows).enumerate() {
+        if ry + row_h > bottom {
+            break;
+        }
+        let row = Area::new(rx - ui.s(8.0), ry, rw + ui.s(16.0), row_h - ui.s(2.0));
+        if selected == Some(i) {
+            ui.fill(row, ACTIVE_BG);
+            ui.fill(Area::new(row.x, row.y + ui.s(7.0), ui.s(3.0), row.h - ui.s(14.0)), ACCENT);
+        } else if hover == Some(Hit::DashAgent(i)) {
+            ui.fill(row, HOVER_BG);
+        }
+        let (icon, color) = state_icon(a.state, a.ai, tick);
+        ui.text(icon, rx, ry + ui.s(6.0), ui.s(16.0), 12.5, color, false, Align::Left);
+        let tw = rw - ui.s(22.0) - ui.s(80.0);
+        ui.text(
+            format!("{} · {}", a.project, a.title),
+            rx + ui.s(22.0),
+            ry + ui.s(6.0),
+            tw,
+            12.0,
+            TEXT,
+            false,
+            Align::Left,
+        );
+        let t = a.tokens.map(|t| format!("{} tok", tok(t))).unwrap_or_else(|| "—".into());
+        ui.text(
+            t,
+            rx,
+            ry + ui.s(6.0),
+            rw,
+            11.5,
+            if a.tokens.is_some() { TEXT } else { DIM },
+            false,
+            Align::Right,
+        );
+        ui.hit(row, Hit::DashAgent(i));
+        ry += row_h;
+    }
+    if agents.len() > max_rows {
+        ui.text(format!("y {} más · ⌘J", agents.len() - max_rows), rx, ry, rw, 10.5, DIM, false, Align::Left);
+        ry += ui.s(18.0);
+    }
+
+    // Proyectos de la semana, sumando asistentes.
+    let mut projects: Vec<(String, Vec<(Provider, u64)>)> = Vec::new();
+    for v in &state.views {
+        for (name, t) in &v.projects {
+            match projects.iter_mut().find(|(n, _)| n == name) {
+                Some((_, parts)) => parts.push((v.provider, *t)),
+                None => projects.push((name.clone(), vec![(v.provider, *t)])),
+            }
+        }
+    }
+    let total = |p: &[(Provider, u64)]| p.iter().map(|e| e.1).sum::<u64>();
+    projects.sort_by_key(|a| std::cmp::Reverse(total(&a.1)));
+    let prow = ui.s(34.0);
+    if !projects.is_empty() && ry + ui.s(24.0) + prow <= bottom {
+        ry += ui.s(16.0);
+        ui.section("PROYECTOS · SEMANA", "", rx, ry, rw);
+        ry += ui.s(24.0);
+        let max = projects.first().map(|p| total(&p.1)).unwrap_or(1).max(1) as f32;
+        for (name, parts) in projects.iter().take(5) {
+            if ry + prow > bottom {
+                break;
+            }
+            ui.text(name, rx, ry, rw, 12.0, TEXT, false, Align::Left);
+            ui.text(tok(total(parts)), rx, ry, rw, 12.0, DIM, false, Align::Right);
+            let by = ry + ui.s(19.0);
+            ui.fill(Area::new(rx, by, rw, ui.s(5.0)), TRACK);
+            let mut sx = rx;
+            for (p, t) in parts {
+                let sw = (rw * *t as f32 / max).round();
+                if sw > 0.0 {
+                    ui.fill(Area::new(sx, by, sw, ui.s(5.0)), accent(*p));
+                    sx += sw;
+                }
+            }
+            ry += prow;
+        }
+    }
+
+    ui.text(
+        "↑↓ elegir agente  ·  ↵ ir  ·  esc cerrar  ·  tokens frescos (sin lecturas de caché)",
+        x,
+        bx.bottom() - ui.s(28.0),
+        iw,
+        10.0,
+        DIM,
+        false,
+        Align::Left,
+    );
 }
 
 /// Barra de búsqueda flotante en la esquina superior derecha de un panel.

@@ -322,6 +322,8 @@ struct App {
     claude_settings: Option<PathBuf>,
     /// Bandeja de agentes abierta (⌘J) y fila seleccionada.
     inbox: Option<usize>,
+    /// Panel de mando abierto (con el agente seleccionado, si hay).
+    dashboard: Option<usize>,
     /// Hace falta repintar periódicamente (animaciones, tiempos, heurística).
     tick_needed: Arc<AtomicBool>,
 }
@@ -369,6 +371,7 @@ impl App {
             agent_socket: None,
             claude_settings: None,
             inbox: None,
+            dashboard: None,
             tick_needed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -632,6 +635,11 @@ impl App {
             }
             Action::Inbox => {
                 self.inbox = if self.inbox.is_some() { None } else { Some(0) };
+                self.dashboard = None;
+            }
+            Action::Dashboard => {
+                self.dashboard = if self.dashboard.is_some() { None } else { Some(0) };
+                self.inbox = None;
             }
             Action::NextTab if n > 0 => self.select_tab((self.active + 1) % n),
             Action::PrevTab if n > 0 => self.select_tab((self.active + n - 1) % n),
@@ -783,6 +791,11 @@ impl App {
             Hit::OpenInbox => self.inbox = Some(0),
             Hit::InboxItem(i) => {
                 if let Some((pane, _)) = self.inbox_items().into_iter().nth(i) {
+                    self.go_to_pane(pane);
+                }
+            }
+            Hit::DashAgent(i) => {
+                if let Some((pane, _)) = self.dash_items(&self.usage_state()).into_iter().nth(i) {
                     self.go_to_pane(pane);
                 }
             }
@@ -1143,6 +1156,9 @@ impl App {
         let Some(p) = self.panes.get_mut(&msg.pane) else { return };
         let before = p.agent.as_ref().filter(|a| a.from_hooks).map(|a| a.state);
         p.agent = agents::apply_hook(p.agent.take(), msg.event, visible);
+        if let (Some(a), Some(sid)) = (p.agent.as_mut(), msg.session) {
+            a.session = Some(sid);
+        }
         self.notify_agent(msg.pane, before);
         self.redraw();
     }
@@ -1256,7 +1272,56 @@ impl App {
             a.unseen = false;
         }
         self.inbox = None;
+        self.dashboard = None;
         self.redraw();
+    }
+
+    /// Agentes abiertos para el panel de mando, en el orden de la barra lateral,
+    /// con los tokens de su sesión si se conocen.
+    fn dash_items(&self, usage: &UsageState) -> Vec<(PaneId, ui::DashAgent)> {
+        let mut v = Vec::new();
+        for i in self.display_order() {
+            for id in self.tabs[i].root.leaves() {
+                let Some(p) = self.panes.get(&id) else { continue };
+                let (name, ai) = p.title();
+                let Some(provider) = ai else { continue };
+                let a = p.agent.as_ref();
+                let tokens = a.and_then(|a| a.session.as_ref()).and_then(|sid| {
+                    usage.views.iter().find(|u| u.provider == provider)?.sessions.get(sid).copied()
+                });
+                v.push((
+                    id,
+                    ui::DashAgent {
+                        title: a.and_then(|a| a.task.clone()).unwrap_or(name),
+                        project: p.project.clone(),
+                        ai,
+                        state: a.map(|a| a.state),
+                        tokens,
+                    },
+                ));
+            }
+        }
+        v
+    }
+
+    /// Teclas con el panel de mando abierto. Las consume todas.
+    fn dash_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        let Some(sel) = self.dashboard else { return false };
+        let items = self.dash_items(&self.usage_state());
+        let n = items.len();
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => self.dashboard = None,
+            Key::Named(NamedKey::ArrowDown) if n > 0 => self.dashboard = Some((sel + 1) % n),
+            Key::Named(NamedKey::ArrowUp) if n > 0 => self.dashboard = Some((sel + n - 1) % n),
+            Key::Named(NamedKey::Enter) => {
+                if let Some((pane, _)) = items.into_iter().nth(sel) {
+                    self.go_to_pane(pane);
+                }
+            }
+            _ => {}
+        }
+        self.redraw();
+        true
     }
 
     /// Teclas con la bandeja abierta. Devuelve si la consumió.
@@ -1358,6 +1423,12 @@ impl App {
             }
         }
         let ask_provider = Some(self.selected_provider().unwrap_or(Provider::Claude));
+        let usage = self.usage_state();
+        let dash = self.dashboard.map(|sel| {
+            let items: Vec<ui::DashAgent> = self.dash_items(&usage).into_iter().map(|(_, a)| a).collect();
+            let sel = (!items.is_empty()).then(|| sel.min(items.len() - 1));
+            (sel, items)
+        });
         let Some(gfx) = &mut self.gfx else { return };
         let scale = gfx.scale();
         let tab = &self.tabs[self.active];
@@ -1447,8 +1518,6 @@ impl App {
 
         // Paneles laterales y barra de búsqueda.
         let mut ui = Ui::new(scale);
-        let usage: UsageState =
-            self.usage.as_ref().and_then(|u| u.lock().ok().map(|g| g.clone())).unwrap_or_default();
         if usage.loaded
             && let Some(p) = self.pending_provider.take()
             && let Some(i) = usage.views.iter().position(|v| v.provider == p)
@@ -1475,6 +1544,10 @@ impl App {
         if let Some((sel, items)) = &inbox {
             let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
             ui::draw_inbox(&mut overlay, screen, items, *sel, tick, self.hover);
+        }
+        if let Some((sel, items)) = &dash {
+            let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
+            ui::draw_dashboard(&mut overlay, screen, &usage, items, *sel, tick, self.hover, Utc::now());
         }
         rects.extend(ui.rects.iter().copied());
         labels.append(&mut ui.labels);
@@ -1514,6 +1587,15 @@ impl App {
             && self.started.elapsed() + Duration::from_millis(800) > capture::delay()
         {
             self.inbox = Some(0);
+            gfx.window.request_redraw();
+        }
+        // `FORGE_CAPTURE_DASH`: abre el panel de mando antes de capturar.
+        if capture::target().is_some()
+            && self.dashboard.is_none()
+            && std::env::var_os("FORGE_CAPTURE_DASH").is_some()
+            && self.started.elapsed() + Duration::from_millis(800) > capture::delay()
+        {
+            self.dashboard = Some(0);
             gfx.window.request_redraw();
         }
         // `FORGE_SEARCH=texto` abre la búsqueda en modo captura, para verla.
@@ -1687,6 +1769,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.inbox.is_some() && self.inbox_key(&event) {
                     return;
                 }
+                if self.dashboard.is_some() && self.dash_key(&event) {
+                    return;
+                }
                 if self.selected_block.is_some() && event.logical_key == Key::Named(NamedKey::Escape) {
                     self.selected_block = None;
                     self.redraw();
@@ -1732,6 +1817,16 @@ impl ApplicationHandler<UserEvent> for App {
                     )
                 {
                     self.inbox = None;
+                    self.redraw();
+                    return;
+                }
+                if self.dashboard.is_some()
+                    && !matches!(
+                        ui::hit_at(&self.hits, self.cursor.0, self.cursor.1),
+                        Some(Hit::DashAgent(_))
+                    )
+                {
+                    self.dashboard = None;
                     self.redraw();
                     return;
                 }

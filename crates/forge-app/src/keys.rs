@@ -44,6 +44,8 @@ pub enum Action {
     AskAi,
     /// Bandeja de agentes: los que te esperan, primero.
     Inbox,
+    /// Panel de mando: consumo de todos los asistentes y agentes abiertos.
+    Dashboard,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -75,6 +77,7 @@ const NAMES: &[(&str, Action)] = &[
     ("block_next", Action::BlockNext),
     ("ask_ai", Action::AskAi),
     ("inbox", Action::Inbox),
+    ("dashboard", Action::Dashboard),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -108,6 +111,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("block_next", "cmd+down"),
     ("ask_ai", "cmd+i"),
     ("inbox", "cmd+j"),
+    ("dashboard", "cmd+u"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

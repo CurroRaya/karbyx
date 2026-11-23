@@ -137,6 +137,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | ⌘C (con un bloque seleccionado) | Copiar el comando y su salida |
 | ⌘I | Preguntar a la IA por el bloque seleccionado o el último que falló |
 | ⌘J | Bandeja de agentes: los que te esperan primero; ↑↓ y ↵ para ir a uno |
+| ⌘U | Panel de mando: consumo de todos los asistentes y agentes abiertos |
 | ⌘K | Limpiar pantalla |
 | ⌘Q | Salir |
 
@@ -157,6 +158,10 @@ forge está pensado para trabajar con varios agentes de IA a la vez.
 - **Bandeja de atención (⌘J):** todos los agentes de todas las pestañas, los
   que te esperan primero. El aviso «● N te esperan» de la cabecera la abre.
 - **Avisos de macOS** cuando un agente te espera o termina y no lo estás viendo.
+- **Panel de mando (⌘U):** una tarjeta por asistente (hoy, ventana de 5 h,
+  semana y las últimas 24 h por horas), el histórico de 14 días apilado por
+  asistente, los agentes abiertos con los tokens que lleva cada sesión (Claude)
+  y los proyectos que más consumen esta semana.
 
 Con **Claude Code** el estado es exacto: forge lo lanza con
 `--settings` y unos *hooks* que le cuentan cada paso (también si escribes
@@ -251,6 +256,7 @@ FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra c
 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
 FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
 FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
+FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
 echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
 FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
 ```

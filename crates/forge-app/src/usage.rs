@@ -4,11 +4,11 @@
 //! Hilo en segundo plano que mantiene actualizado el consumo de los
 //! asistentes de IA para el panel derecho. Solo tokens y tiempos: sin importes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Local, Timelike, Utc};
 use forge_ai::{LimitStatus, Provider, RateLimits, Scanner, UsageConfig, UsageRecord, summarize};
 
 #[derive(Debug, Clone)]
@@ -75,6 +75,68 @@ pub struct UsageView {
     pub has_limits: bool,
     pub official: Vec<OfficialLimit>,
     pub recent: Vec<BlockBar>,
+    /// Tokens por hora en las últimas 24 h (la última es la hora en curso).
+    pub hourly: Vec<u64>,
+    /// Tokens por día en los últimos [`DAYS`] días (el último es hoy).
+    pub daily: Vec<u64>,
+    /// Proyectos con más consumo esta semana.
+    pub projects: Vec<(String, u64)>,
+    /// Tokens por sesión del asistente (últimos 7 días), para saber lo que
+    /// lleva gastado cada agente abierto en forge.
+    pub sessions: HashMap<String, u64>,
+}
+
+/// Días del histórico diario del panel de mando.
+pub const DAYS: usize = 14;
+
+/// Series temporales y desgloses del panel de mando.
+#[derive(Debug, Default, PartialEq)]
+pub struct Breakdown {
+    pub hourly: Vec<u64>,
+    pub daily: Vec<u64>,
+    pub projects: Vec<(String, u64)>,
+    pub sessions: HashMap<String, u64>,
+}
+
+/// Nombre de proyecto como en la barra lateral: la última carpeta del `cwd`.
+fn project_name(cwd: &str) -> String {
+    match cwd.trim_end_matches('/').rsplit('/').next() {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => "sin proyecto".into(),
+    }
+}
+
+/// Recorre solo los registros recientes (vienen ordenados por fecha).
+pub fn breakdown(records: &[UsageRecord], week_start: DateTime<Utc>, now: DateTime<Utc>) -> Breakdown {
+    let hour =
+        now.with_minute(0).and_then(|t| t.with_second(0)).and_then(|t| t.with_nanosecond(0)).unwrap_or(now);
+    let first_hour = hour - Duration::hours(23);
+    let today = now.with_timezone(&Local).date_naive();
+    let since = (now - Duration::days(DAYS as i64)).min(week_start).min(now - Duration::days(7));
+    let mut b = Breakdown { hourly: vec![0; 24], daily: vec![0; DAYS], ..Default::default() };
+    let mut projects: HashMap<String, u64> = HashMap::new();
+    for r in records.iter().rev().take_while(|r| r.timestamp >= since) {
+        let t = r.tokens.billable_weighted();
+        if r.timestamp >= first_hour && r.timestamp <= now + Duration::hours(1) {
+            let i = ((r.timestamp - first_hour).num_hours() as usize).min(23);
+            b.hourly[i] += t;
+        }
+        let back = (today - r.timestamp.with_timezone(&Local).date_naive()).num_days();
+        if (0..DAYS as i64).contains(&back) {
+            b.daily[DAYS - 1 - back as usize] += t;
+        }
+        if r.timestamp >= week_start {
+            *projects.entry(project_name(&r.project)).or_default() += t;
+        }
+        if r.timestamp >= now - Duration::days(7) && !r.session_id.is_empty() {
+            *b.sessions.entry(r.session_id.clone()).or_default() += t;
+        }
+    }
+    let mut p: Vec<_> = projects.into_iter().filter(|e| e.1 > 0).collect();
+    p.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    p.truncate(8);
+    b.projects = p;
+    b
 }
 
 /// Estado compartido con la UI.
@@ -165,6 +227,7 @@ pub fn build_view(
             active: Some(b.start) == active_start,
         })
         .collect();
+    let bd = breakdown(records, s.week_start, now);
     UsageView {
         provider,
         has_data: !records.is_empty(),
@@ -178,6 +241,10 @@ pub fn build_view(
         has_limits: lim.is_set() || !official.is_empty(),
         official,
         recent,
+        hourly: bd.hourly,
+        daily: bd.daily,
+        projects: bd.projects,
+        sessions: bd.sessions,
     }
 }
 
@@ -237,6 +304,40 @@ mod tests {
         assert_eq!(short_model("claude-opus-5-5"), "opus 5.5");
         assert_eq!(short_model("claude-sonnet-5"), "sonnet 5");
         assert_eq!(short_model("gpt-5-codex"), "gpt-5-codex");
+    }
+
+    fn rec(ts: DateTime<Utc>, project: &str, session: &str, input: u64) -> UsageRecord {
+        UsageRecord {
+            provider: Provider::Claude,
+            timestamp: ts,
+            model: "claude-opus-5-5".into(),
+            project: project.into(),
+            session_id: session.into(),
+            tokens: forge_ai::Tokens { input, ..Default::default() },
+            dedupe_key: format!("{ts}{session}{input}"),
+        }
+    }
+
+    #[test]
+    fn breakdown_series() {
+        let now: DateTime<Utc> = "2026-11-22T12:30:00Z".parse().unwrap();
+        let records = vec![
+            rec(now - Duration::days(30), "/a/old", "s0", 999), // fuera de todo
+            rec(now - Duration::days(3), "/x/a", "s1", 100),
+            rec(now - Duration::hours(2), "/x/b", "s2", 10),
+            rec(now - Duration::minutes(5), "/x/a", "s2", 5),
+        ];
+        let week_start = now - Duration::days(4);
+        let b = breakdown(&records, week_start, now);
+        assert_eq!(b.hourly.len(), 24);
+        assert_eq!(b.hourly[23], 5);
+        assert_eq!(b.hourly[21], 10);
+        assert_eq!(b.hourly.iter().sum::<u64>(), 15);
+        assert_eq!(b.daily.iter().sum::<u64>(), 115);
+        assert_eq!(b.projects, vec![("a".to_string(), 105), ("b".to_string(), 10)]);
+        assert_eq!(b.sessions.get("s2"), Some(&15));
+        assert_eq!(b.sessions.get("s1"), Some(&100));
+        assert!(!b.sessions.contains_key("s0"));
     }
 
     #[test]

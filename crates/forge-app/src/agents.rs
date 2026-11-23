@@ -39,6 +39,9 @@ pub struct AgentStatus {
     pub unseen: bool,
     /// El estado viene de hooks (preciso) y no de la heurística.
     pub from_hooks: bool,
+    /// Id de la sesión del asistente (Claude lo manda en cada hook): enlaza
+    /// el agente con su consumo de tokens en el historial.
+    pub session: Option<String>,
 }
 
 /// Evento de un hook de Claude Code, ya interpretado.
@@ -127,7 +130,15 @@ pub fn parse_hook(v: &Value) -> HookEvent {
 
 impl AgentStatus {
     fn new(state: AgentState, from_hooks: bool) -> Self {
-        Self { state, task: None, detail: None, since: Instant::now(), unseen: false, from_hooks }
+        Self {
+            state,
+            task: None,
+            detail: None,
+            since: Instant::now(),
+            unseen: false,
+            from_hooks,
+            session: None,
+        }
     }
 
     fn set_state(&mut self, state: AgentState, visible: bool) {
@@ -201,6 +212,7 @@ pub fn heuristic(prev: Option<AgentStatus>, idle: Duration, visible: bool) -> Ag
 pub struct HookMsg {
     pub pane: u64,
     pub event: HookEvent,
+    pub session: Option<String>,
 }
 
 fn runtime_dir() -> Option<PathBuf> {
@@ -224,8 +236,10 @@ pub fn start_server(on_msg: impl Fn(HookMsg) + Send + 'static) -> Option<PathBuf
                 let _ = (&stream).take(1 << 20).read_to_end(&mut buf);
                 let Ok(v) = serde_json::from_slice::<Value>(&buf) else { continue };
                 let Some(pane) = v.get("pane").and_then(Value::as_u64) else { continue };
-                let event = parse_hook(v.get("event").unwrap_or(&Value::Null));
-                on_msg(HookMsg { pane, event });
+                let ev = v.get("event").unwrap_or(&Value::Null);
+                let session =
+                    ev.get("session_id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from);
+                on_msg(HookMsg { pane, event: parse_hook(ev), session });
             }
         })
         .ok()?;
