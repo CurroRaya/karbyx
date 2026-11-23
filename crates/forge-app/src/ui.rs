@@ -12,6 +12,8 @@ use chrono::{DateTime, Duration, Local, Utc};
 use crate::rects::{Rect, linear};
 use forge_ai::Provider;
 
+use crate::agents::AgentState;
+
 use crate::usage::{LimitView, UsageState};
 
 pub type Rgb = [u8; 3];
@@ -113,6 +115,10 @@ pub enum Hit {
     Provider(usize),
     /// Preguntar a la IA por un bloque fallido: (panel, bloque).
     AskAi(u64, u64),
+    /// Abrir la bandeja de agentes.
+    OpenInbox,
+    /// Fila de la bandeja de agentes.
+    InboxItem(usize),
 }
 
 /// Color de cada asistente.
@@ -244,22 +250,64 @@ fn limit_color(p: f64) -> Rgb {
 
 // ---------- barra izquierda: sesiones ----------
 
+const ORANGE: Rgb = [0xe5, 0x9b, 0x52];
+
+/// Icono y color del estado de un agente (`tick` anima el de trabajando).
+pub fn state_icon(state: Option<AgentState>, ai: Option<Provider>, tick: u64) -> (&'static str, Rgb) {
+    const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
+    match (state, ai) {
+        (Some(AgentState::Working), _) => (SPIN[(tick % 4) as usize], YELLOW),
+        (Some(AgentState::Waiting), _) => ("●", ORANGE),
+        (Some(AgentState::Done), _) => ("✓", GREEN),
+        (None, Some(p)) => ("◆", accent(p)),
+        (None, None) => ("❯", DIM),
+    }
+}
+
+/// Una pestaña tal como se ve en la barra lateral (ya en orden de pantalla).
 pub struct TabView {
+    /// Índice real de la pestaña.
+    pub index: usize,
+    /// Número de ⌘N (1-9) en orden de pantalla.
+    pub shortcut: Option<usize>,
     pub title: String,
     pub subtitle: String,
-    /// Asistente que corre en la sesión, si lo hay.
+    pub project: String,
     pub ai: Option<Provider>,
+    pub state: Option<AgentState>,
+    pub unseen: bool,
+    pub elapsed: Option<String>,
     pub active: bool,
 }
 
-/// `ai`: asistente para el botón de nueva sesión (el seleccionado en el panel derecho).
-pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>, hover: Option<Hit>) {
+/// `ai`: asistente para el botón de nueva sesión. `attention`: agentes que
+/// te esperan. `tick`: animación.
+pub fn draw_left(
+    ui: &mut Ui,
+    area: Area,
+    tabs: &[TabView],
+    ai: Option<Provider>,
+    attention: usize,
+    tick: u64,
+    hover: Option<Hit>,
+) {
     ui.fill(area, PANEL_BG);
     ui.fill(Area::new(area.right() - 1.0, area.y, 1.0, area.h), BORDER);
 
     let pad = ui.s(16.0);
     let mut y = area.y + ui.s(16.0);
     ui.text("SESIONES", area.x + pad, y, area.w - 2.0 * pad, 10.5, DIM, true, Align::Left);
+
+    // Aviso de agentes que esperan (abre la bandeja de atención).
+    if attention > 0 {
+        let label =
+            if attention == 1 { "1 te espera".to_string() } else { format!("{attention} te esperan") };
+        let w = ui.s(96.0);
+        let chip = Area::new(area.right() - pad - ui.s(34.0) - w, y - ui.s(4.0), w, ui.s(22.0));
+        ui.fill(chip, if hover == Some(Hit::OpenInbox) { [0x3a, 0x2c, 0x1f] } else { [0x2e, 0x25, 0x1c] });
+        ui.text(format!("● {label}"), chip.x, chip.y + ui.s(4.0), chip.w, 10.5, ORANGE, true, Align::Center);
+        ui.hit(chip, Hit::OpenInbox);
+    }
 
     // Botón "+" (nueva terminal).
     let b = ui.s(24.0);
@@ -269,12 +317,27 @@ pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>
     }
     ui.text("+", plus.x, plus.y + ui.s(1.0), plus.w, 15.0, TEXT, false, Align::Center);
     ui.hit(plus, Hit::NewTab);
-    y += ui.s(32.0);
+    y += ui.s(30.0);
 
     let item_h = ui.s(48.0);
     let ix = area.x + ui.s(8.0);
     let iw = area.w - ui.s(16.0);
-    for (i, t) in tabs.iter().enumerate() {
+    let bottom_limit = area.bottom() - ui.s(92.0);
+    let mut last_project: Option<&str> = None;
+    for t in tabs {
+        if y + item_h > bottom_limit {
+            break;
+        }
+        // Cabecera de proyecto al cambiar de grupo.
+        if last_project != Some(t.project.as_str()) {
+            if last_project.is_some() {
+                y += ui.s(6.0);
+            }
+            ui.text(&t.project, area.x + pad, y, area.w - 2.0 * pad, 10.0, DIM, true, Align::Left);
+            y += ui.s(20.0);
+            last_project = Some(t.project.as_str());
+        }
+        let i = t.index;
         let item = Area::new(ix, y, iw, item_h);
         let hovered = matches!(hover, Some(Hit::Tab(j) | Hit::CloseTab(j)) if j == i);
         if t.active {
@@ -283,17 +346,18 @@ pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>
         } else if hovered {
             ui.fill(item, HOVER_BG);
         }
-        let (icon, icon_color) = match t.ai {
-            Some(p) => ("◆", accent(p)),
-            None => ("❯", DIM),
-        };
+        let (icon, icon_color) = state_icon(t.state, t.ai, tick);
         ui.text(icon, ix + ui.s(12.0), y + ui.s(8.0), ui.s(16.0), 12.0, icon_color, false, Align::Left);
         let tx = ix + ui.s(32.0);
-        let tw = iw - ui.s(32.0) - ui.s(34.0);
-        ui.text(&t.title, tx, y + ui.s(7.0), tw, 13.0, TEXT, t.active, Align::Left);
-        ui.text(&t.subtitle, tx, y + ui.s(26.0), tw, 11.0, DIM, false, Align::Left);
+        let tw = iw - ui.s(32.0) - ui.s(44.0);
+        ui.text(&t.title, tx, y + ui.s(7.0), tw, 13.0, TEXT, t.active || t.unseen, Align::Left);
+        let sub_color = match t.state {
+            Some(AgentState::Waiting) => ORANGE,
+            _ => DIM,
+        };
+        ui.text(&t.subtitle, tx, y + ui.s(26.0), tw + ui.s(10.0), 11.0, sub_color, false, Align::Left);
 
-        // A la derecha: atajo ⌘N o, al pasar el ratón, el botón de cerrar.
+        // A la derecha: tiempo en el estado (agentes) o ⌘N; al pasar el ratón, cerrar.
         let close = Area::new(item.right() - ui.s(28.0), y + ui.s(13.0), ui.s(22.0), ui.s(22.0));
         if hovered {
             if hover == Some(Hit::CloseTab(i)) {
@@ -301,20 +365,23 @@ pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>
             }
             ui.text("×", close.x, close.y + ui.s(1.0), close.w, 14.0, TEXT, false, Align::Center);
             ui.hit(close, Hit::CloseTab(i));
-        } else if i < 9 {
-            ui.text(
-                format!("⌘{}", i + 1),
-                close.x - ui.s(8.0),
-                close.y + ui.s(3.0),
-                close.w + ui.s(8.0),
-                10.5,
-                DIM,
-                false,
-                Align::Right,
-            );
+        } else {
+            let right = match (&t.elapsed, t.shortcut) {
+                (Some(e), _) => Some(e.clone()),
+                (None, Some(n)) => Some(format!("⌘{n}")),
+                _ => None,
+            };
+            if let Some(r) = right {
+                let rx = close.x - ui.s(20.0);
+                let color = if t.unseen { ORANGE } else { DIM };
+                ui.text(r, rx, y + ui.s(8.0), close.w + ui.s(20.0), 10.5, color, t.unseen, Align::Right);
+            }
+            if t.unseen {
+                ui.fill(Area::new(item.right() - ui.s(12.0), y + ui.s(30.0), ui.s(5.0), ui.s(5.0)), ORANGE);
+            }
         }
         ui.hit(item, Hit::Tab(i));
-        y += item_h + ui.s(4.0);
+        y += item_h + ui.s(2.0);
     }
 
     // Botón inferior: nueva sesión del asistente.
@@ -326,9 +393,9 @@ pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>
             let label = format!("◆  Nueva sesión de {}", p.name());
             ui.text(label, btn.x, btn.y + ui.s(9.0), btn.w, 12.5, accent(p), true, Align::Center);
             ui.hit(btn, Hit::NewAi);
-            format!("⌘T terminal  ·  ⌘⇧C {}  ·  ⌘B ocultar", p.name())
+            format!("⌘T terminal · ⌘⇧C {} · ⌘J agentes", p.name())
         }
-        None => "⌘T terminal  ·  ⌘B ocultar".to_string(),
+        None => "⌘T terminal · ⌘J agentes · ⌘B ocultar".to_string(),
     };
     ui.text(
         hint,
@@ -336,6 +403,111 @@ pub fn draw_left(ui: &mut Ui, area: Area, tabs: &[TabView], ai: Option<Provider>
         area.bottom() - ui.s(34.0),
         area.w - 2.0 * pad,
         10.0,
+        DIM,
+        false,
+        Align::Left,
+    );
+}
+
+// ---------- bandeja de atención (⌘J) ----------
+
+pub struct InboxItem {
+    pub title: String,
+    pub detail: String,
+    pub project: String,
+    pub state: AgentState,
+    pub ai: Option<Provider>,
+    pub elapsed: String,
+    pub unseen: bool,
+}
+
+/// Lista flotante de agentes: primero los que te esperan.
+pub fn draw_inbox(
+    ui: &mut Ui,
+    screen: Area,
+    items: &[InboxItem],
+    selected: usize,
+    tick: u64,
+    hover: Option<Hit>,
+) {
+    ui.tint(screen, [0, 0, 0], 0.45);
+    let w = ui.s(600.0).min(screen.w - ui.s(40.0));
+    let row_h = ui.s(54.0);
+    let shown = items.len().clamp(1, 8);
+    let h = ui.s(58.0) + row_h * shown as f32 + ui.s(36.0);
+    let bx = Area::new(screen.x + (screen.w - w) / 2.0, screen.y + screen.h * 0.18, w, h);
+    ui.fill(Area::new(bx.x - 1.0, bx.y - 1.0, bx.w + 2.0, bx.h + 2.0), BORDER);
+    ui.fill(bx, PANEL_BG);
+
+    let pad = ui.s(18.0);
+    let waiting = items
+        .iter()
+        .filter(|i| i.state != AgentState::Working && (i.unseen || i.state == AgentState::Waiting))
+        .count();
+    let title = match waiting {
+        0 => "AGENTES".to_string(),
+        1 => "AGENTES · 1 te espera".to_string(),
+        n => format!("AGENTES · {n} te esperan"),
+    };
+    ui.text(title, bx.x + pad, bx.y + ui.s(18.0), bx.w - 2.0 * pad, 10.5, DIM, true, Align::Left);
+    ui.text("⌘J", bx.x + pad, bx.y + ui.s(18.0), bx.w - 2.0 * pad, 10.5, DIM, false, Align::Right);
+
+    let mut y = bx.y + ui.s(46.0);
+    if items.is_empty() {
+        ui.text(
+            "No hay agentes abiertos. Abre uno con ⌘⇧C.",
+            bx.x + pad,
+            y + ui.s(16.0),
+            bx.w - 2.0 * pad,
+            12.5,
+            DIM,
+            false,
+            Align::Left,
+        );
+    }
+    for (i, it) in items.iter().take(8).enumerate() {
+        let row = Area::new(bx.x + ui.s(8.0), y, bx.w - ui.s(16.0), row_h - ui.s(4.0));
+        if i == selected {
+            ui.fill(row, ACTIVE_BG);
+            ui.fill(Area::new(row.x, row.y + ui.s(10.0), ui.s(3.0), row.h - ui.s(20.0)), ACCENT);
+        } else if hover == Some(Hit::InboxItem(i)) {
+            ui.fill(row, HOVER_BG);
+        }
+        let (icon, color) = state_icon(Some(it.state), it.ai, tick);
+        ui.text(icon, row.x + ui.s(12.0), row.y + ui.s(8.0), ui.s(16.0), 13.0, color, false, Align::Left);
+        let tx = row.x + ui.s(34.0);
+        let tw = row.w - ui.s(34.0) - ui.s(90.0);
+        ui.text(
+            format!("{} · {}", it.project, it.title),
+            tx,
+            row.y + ui.s(7.0),
+            tw,
+            13.0,
+            TEXT,
+            it.unseen,
+            Align::Left,
+        );
+        let dcolor = if it.state == AgentState::Waiting { ORANGE } else { DIM };
+        ui.text(&it.detail, tx, row.y + ui.s(27.0), tw, 11.0, dcolor, false, Align::Left);
+        ui.text(
+            &it.elapsed,
+            row.right() - ui.s(90.0),
+            row.y + ui.s(9.0),
+            ui.s(78.0),
+            10.5,
+            if it.unseen { ORANGE } else { DIM },
+            it.unseen,
+            Align::Right,
+        );
+        ui.hit(row, Hit::InboxItem(i));
+        y += row_h;
+    }
+    ui.text(
+        "↑↓ elegir  ·  ↵ ir al agente  ·  esc cerrar",
+        bx.x + pad,
+        bx.bottom() - ui.s(28.0),
+        bx.w - 2.0 * pad,
+        10.5,
         DIM,
         false,
         Align::Left,

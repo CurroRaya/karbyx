@@ -100,6 +100,7 @@ pub(crate) fn spawn_reader<L: EventListener + Send + 'static>(
     listener: L,
     table: Arc<Mutex<BlockTable>>,
     events: Sender<TermEvent>,
+    activity: Arc<crate::Activity>,
 ) {
     std::thread::Builder::new()
         .name("pty-reader".into())
@@ -154,6 +155,9 @@ pub(crate) fn spawn_reader<L: EventListener + Send + 'static>(
                         // EIO: el hijo cerró el PTY.
                         Err(_) => break 'outer,
                     }
+                }
+                if batch > 0 {
+                    activity.output();
                 }
                 listener.send_event(Event::Wakeup);
             }

@@ -42,6 +42,8 @@ pub enum Action {
     BlockNext,
     /// Preguntar a la IA por el bloque seleccionado (o el último fallido).
     AskAi,
+    /// Bandeja de agentes: los que te esperan, primero.
+    Inbox,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -72,6 +74,7 @@ const NAMES: &[(&str, Action)] = &[
     ("block_prev", Action::BlockPrev),
     ("block_next", Action::BlockNext),
     ("ask_ai", Action::AskAi),
+    ("inbox", Action::Inbox),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -104,6 +107,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("block_prev", "cmd+up"),
     ("block_next", "cmd+down"),
     ("ask_ai", "cmd+i"),
+    ("inbox", "cmd+j"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

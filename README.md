@@ -136,6 +136,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | ⌘↑ / ⌘↓ | Seleccionar el comando (bloque) anterior / siguiente; Esc quita la selección |
 | ⌘C (con un bloque seleccionado) | Copiar el comando y su salida |
 | ⌘I | Preguntar a la IA por el bloque seleccionado o el último que falló |
+| ⌘J | Bandeja de agentes: los que te esperan primero; ↑↓ y ↵ para ir a uno |
 | ⌘K | Limpiar pantalla |
 | ⌘Q | Salir |
 
@@ -143,6 +144,24 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 clic la línea y ⌥+arrastrar un bloque rectangular. Los divisores entre
 paneles se arrastran. Si la aplicación pide el ratón (vim, htop, tmux) los
 clics le llegan a ella; con ⇧ se fuerza la selección normal.
+
+### Agentes: forge sabe qué hacen
+
+forge está pensado para trabajar con varios agentes de IA a la vez.
+
+- **Estado en la barra lateral:** cada sesión de un agente muestra si está
+  **trabajando** (◐), **te espera** (● naranja) o ha **terminado** (✓), con su
+  tarea como título, lo que hace ahora («Editando ui.rs», «Ejecutando: cargo
+  test») y desde cuándo.
+- **Agrupadas por proyecto** (la raíz del repositorio git de cada sesión).
+- **Bandeja de atención (⌘J):** todos los agentes de todas las pestañas, los
+  que te esperan primero. El aviso «● N te esperan» de la cabecera la abre.
+- **Avisos de macOS** cuando un agente te espera o termina y no lo estás viendo.
+
+Con **Claude Code** el estado es exacto: forge lo lanza con
+`--settings` y unos *hooks* que le cuentan cada paso (también si escribes
+`claude` a mano en una terminal de forge). Tus ajustes de Claude no se tocan.
+Con otros agentes (Codex, Gemini...) se deduce de su actividad.
 
 ### Bloques de comandos (estilo Warp)
 
@@ -194,7 +213,7 @@ Acciones configurables: `copy`, `paste`, `quit`, `new_tab`, `new_ai`, `close`,
 `next_tab`, `prev_tab`, `toggle_sidebar`, `toggle_usage`, `font_bigger`,
 `font_smaller`, `font_reset`, `clear`, `split_right`, `split_down`,
 `focus_left`, `focus_right`, `focus_up`, `focus_down`, `find`, `find_next`,
-`find_prev`, `block_prev`, `block_next`, `ask_ai`.
+`find_prev`, `block_prev`, `block_next`, `ask_ai`, `inbox`.
 
 ### Asistentes y límites
 
@@ -230,6 +249,9 @@ FORGE_SELFTEST=1 cargo run --release -p forge-app                   # teclea sol
 FORGE_PROFILE=1 FORGE_SELFTEST=1 cargo run --release -p forge-app  # registra el tiempo de todos los frames
 FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra configuración
 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
+FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
+FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
+echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
 FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
 ```
 

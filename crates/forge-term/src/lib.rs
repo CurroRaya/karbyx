@@ -193,6 +193,45 @@ pub struct Session {
     master_fd: i32,
     shell_pid: i32,
     search: RefCell<Option<SearchState>>,
+    activity: Arc<Activity>,
+}
+
+/// Momentos de la última salida del PTY y de la última tecla enviada, para
+/// saber si lo que corre en la sesión está trabajando o esperando.
+#[derive(Debug, Default)]
+pub struct Activity {
+    last_output: std::sync::atomic::AtomicU64,
+    last_input: std::sync::atomic::AtomicU64,
+}
+
+fn now_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+impl Activity {
+    pub(crate) fn output(&self) {
+        self.last_output.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn input(&self) {
+        self.last_input.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tiempo desde la última salida que **no** es eco de una tecla recién
+    /// pulsada (salida en los 300 ms siguientes a teclear no cuenta).
+    pub fn idle_for(&self) -> Duration {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (out, inp) = (self.last_output.load(Relaxed), self.last_input.load(Relaxed));
+        if out == 0 {
+            return Duration::MAX;
+        }
+        let echo = inp != 0 && out >= inp && out - inp < 300;
+        if echo {
+            return Duration::MAX;
+        }
+        Duration::from_millis(now_ms().saturating_sub(out))
+    }
 }
 
 struct SearchState {
@@ -271,7 +310,15 @@ impl Session {
         let blocks = Arc::new(Mutex::new(BlockTable::default()));
         let (block_tx, block_events) = unbounded();
         let (writer, writer_rx) = unbounded();
-        io::spawn_reader(pty.file().try_clone()?, term.clone(), listener, blocks.clone(), block_tx);
+        let activity = Arc::new(Activity::default());
+        io::spawn_reader(
+            pty.file().try_clone()?,
+            term.clone(),
+            listener,
+            blocks.clone(),
+            block_tx,
+            activity.clone(),
+        );
         io::spawn_writer(pty.file().try_clone()?, writer_rx);
 
         Ok(Self {
@@ -286,6 +333,7 @@ impl Session {
             master_fd,
             shell_pid,
             search: RefCell::new(None),
+            activity,
         })
     }
 
@@ -312,7 +360,13 @@ impl Session {
     }
 
     /// Envía bytes a la shell (teclas, pegado...).
+    /// Tiempo sin salida propia (sin contar el eco del tecleo).
+    pub fn idle_for(&self) -> Duration {
+        self.activity.idle_for()
+    }
+
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
+        self.activity.input();
         // Escribir vuelve a la parte inferior del scrollback, como en iTerm2.
         self.term.lock().scroll_display(Scroll::Bottom);
         self.send(bytes.into().into_owned());

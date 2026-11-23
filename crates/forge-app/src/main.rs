@@ -4,6 +4,7 @@
 //! `forge`: terminal acelerada por GPU con sesiones en una barra lateral,
 //! paneles divididos y el consumo de los asistentes de IA en un panel derecho.
 
+mod agents;
 mod capture;
 mod config;
 mod gfx;
@@ -32,6 +33,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+use crate::agents::{AgentState, AgentStatus};
 use crate::config::Config;
 use crate::gfx::{CursorStyle, FontSpec, Gfx, PaneText};
 use crate::input::KeyOutcome;
@@ -44,10 +46,48 @@ use crate::usage::{SharedUsage, UsageState};
 /// Comando de una sesión de asistente: si el asistente termina (o no está
 /// instalado), la sesión sigue viva con una shell normal.
 fn ai_command(cmd: &str) -> String {
+    let run = launch(cmd, "");
     format!(
-        "if command -v {cmd} >/dev/null 2>&1; then {cmd}; \
+        "if command -v {cmd} >/dev/null 2>&1; then {run}; \
          else printf '\\033[33mNo encuentro el comando {cmd} en el PATH.\\033[0m\\n'; fi; exec \"$SHELL\" -l"
     )
+}
+
+/// Cómo invocar el asistente: Claude lleva los hooks de forge (estado real).
+/// `args` va tal cual al final (ya entrecomillado). Se usa un `if` explícito
+/// porque zsh no parte en palabras `${VAR:+--settings "$VAR"}` y Claude
+/// recibiría un único argumento "--settings /ruta".
+fn launch(cmd: &str, args: &str) -> String {
+    let args = if args.is_empty() { String::new() } else { format!(" {args}") };
+    if cmd == "claude" {
+        format!(
+            r#"if [ -n "$FORGE_CLAUDE_SETTINGS" ]; then claude --settings "$FORGE_CLAUDE_SETTINGS"{args}; else claude{args}; fi"#
+        )
+    } else {
+        format!("{cmd}{args}")
+    }
+}
+
+/// Variables que deja Claude Code (o su app de escritorio) en el entorno si
+/// forge se lanza desde ahí: no deben llegar a las sesiones de forge, o el
+/// Claude que abras dentro se creería un subproceso de otra sesión.
+fn clean_inherited_env() {
+    const PREFIXES: [&str; 3] = ["CLAUDECODE", "CLAUDE_CODE_", "CLAUDE_AGENT_SDK_"];
+    const EXACT: [&str; 5] = [
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PREVIEW_CLASSIFIER_FLOOR",
+        "AI_AGENT",
+        "__CFBundleIdentifier",
+    ];
+    let doomed: Vec<String> = std::env::vars_os()
+        .filter_map(|(k, _)| k.into_string().ok())
+        .filter(|k| PREFIXES.iter().any(|p| k.starts_with(p)) || EXACT.contains(&k.as_str()))
+        .collect();
+    for k in doomed {
+        // SAFETY: se llama al principio de `main`, antes de crear ningún hilo.
+        unsafe { std::env::remove_var(k) };
+    }
 }
 
 /// Comando de una sesión de asistente que arranca con una pregunta inicial
@@ -56,7 +96,7 @@ fn ai_command_with_prompt(p: Provider, prompt: &std::path::Path) -> String {
     let file = prompt.to_string_lossy().replace('\'', "'\\''");
     let ask = match p {
         Provider::Gemini => format!("gemini -i \"$(cat '{file}')\""),
-        _ => format!("{} \"$(cat '{file}')\"", p.command()),
+        _ => launch(p.command(), &format!("\"$(cat '{file}')\"")),
     };
     let cmd = p.command();
     format!(
@@ -123,6 +163,8 @@ enum UserEvent {
     Type(String),
     /// `forge.toml` ha cambiado.
     Config(Box<Config>),
+    /// Un hook de Claude Code informa del estado de un panel.
+    Hook(agents::HookMsg),
 }
 
 /// `FORGE_SELFTEST=1`: teclea líneas largas (con salto de línea y scroll) en
@@ -155,6 +197,32 @@ struct Pane {
     session: Session,
     kind: PaneKind,
     info: ProcessInfo,
+    /// Estado del agente de IA que corre en el panel, si hay uno.
+    agent: Option<AgentStatus>,
+    /// Proyecto (raíz git o carpeta) del directorio actual.
+    project: String,
+}
+
+/// Nombre del proyecto de una carpeta: la raíz del repositorio git que la
+/// contiene o, si no hay, la propia carpeta.
+fn project_of(cwd: Option<&std::path::Path>) -> String {
+    let Some(cwd) = cwd else { return "sin proyecto".into() };
+    let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+    if std::env::var_os("HOME").is_some_and(|h| std::path::Path::new(&h) == root) {
+        return "~".into();
+    }
+    root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into())
+}
+
+/// "ahora", "3 min", "2 h", "1 d".
+fn ago(since: Instant) -> String {
+    let s = since.elapsed().as_secs();
+    match s {
+        0..=59 => "ahora".into(),
+        60..=3599 => format!("{} min", s / 60),
+        3600..=86_399 => format!("{} h", s / 3600),
+        _ => format!("{} d", s / 86_400),
+    }
 }
 
 impl Pane {
@@ -249,6 +317,13 @@ struct App {
     occluded: bool,
     /// Último título puesto, para no tocar la ventana en cada frame.
     window_title: String,
+    /// Socket por el que llegan los hooks y ajustes para `claude --settings`.
+    agent_socket: Option<PathBuf>,
+    claude_settings: Option<PathBuf>,
+    /// Bandeja de agentes abierta (⌘J) y fila seleccionada.
+    inbox: Option<usize>,
+    /// Hace falta repintar periódicamente (animaciones, tiempos, heurística).
+    tick_needed: Arc<AtomicBool>,
 }
 
 impl App {
@@ -291,6 +366,10 @@ impl App {
             started: Instant::now(),
             occluded: false,
             window_title: String::new(),
+            agent_socket: None,
+            claude_settings: None,
+            inbox: None,
+            tick_needed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -406,7 +485,8 @@ impl App {
         let size = gfx.grid_size(area);
         // `FORGE_CAPTURE_AI`: pestaña de IA de prueba con una shell normal dentro
         // (para capturas, sin lanzar el asistente de verdad).
-        let dry = capture::target().is_some() && std::env::var_os("FORGE_CAPTURE_AI").is_some();
+        // Con `FORGE_CAPTURE_AI=real` se lanza el asistente de verdad.
+        let dry = capture::target().is_some() && std::env::var("FORGE_CAPTURE_AI").is_ok_and(|v| v != "real");
         let command = match kind {
             PaneKind::Ai(_) if dry => None,
             PaneKind::Ai(p) => {
@@ -419,19 +499,28 @@ impl App {
             }
             PaneKind::Shell => None,
         };
+        let mut env = std::collections::HashMap::new();
+        env.insert("FORGE_PANE".to_string(), self.next_id.to_string());
+        if let Some(sock) = &self.agent_socket {
+            env.insert("FORGE_SOCKET".to_string(), sock.to_string_lossy().into_owned());
+        }
+        if let Some(settings) = &self.claude_settings {
+            env.insert("FORGE_CLAUDE_SETTINGS".to_string(), settings.to_string_lossy().into_owned());
+        }
         let opts = SessionOptions {
             cwd: self.new_session_cwd(),
             command,
+            env,
             scrollback: Some(self.config.terminal.scrollback),
             shell_integration: self.config.terminal.shell_integration,
-            ..Default::default()
         };
         match Session::spawn(opts, size, self.theme.clone(), self.waker()) {
             Ok(session) => {
                 let id = self.next_id;
                 self.next_id += 1;
                 let info = session.process_info();
-                self.panes.insert(id, Pane { session, kind, info });
+                let project = project_of(info.cwd.as_deref());
+                self.panes.insert(id, Pane { session, kind, info, agent: None, project });
                 Some(id)
             }
             Err(e) => {
@@ -536,7 +625,14 @@ impl App {
                     self.remove_pane(id, event_loop);
                 }
             }
-            Action::SelectTab(i) => self.select_tab(i),
+            Action::SelectTab(n) => {
+                if let Some(&i) = self.display_order().get(n) {
+                    self.select_tab(i);
+                }
+            }
+            Action::Inbox => {
+                self.inbox = if self.inbox.is_some() { None } else { Some(0) };
+            }
             Action::NextTab if n > 0 => self.select_tab((self.active + 1) % n),
             Action::PrevTab if n > 0 => self.select_tab((self.active + n - 1) % n),
             Action::NextTab | Action::PrevTab => {}
@@ -684,6 +780,12 @@ impl App {
             }
             Hit::Provider(i) => self.usage_sel = i,
             Hit::AskAi(pane, block) => self.ask_ai(pane, block),
+            Hit::OpenInbox => self.inbox = Some(0),
+            Hit::InboxItem(i) => {
+                if let Some((pane, _)) = self.inbox_items().into_iter().nth(i) {
+                    self.go_to_pane(pane);
+                }
+            }
         }
         self.redraw();
     }
@@ -994,24 +1096,240 @@ impl App {
         if self.info_refreshed.elapsed() > Duration::from_millis(800) {
             for pane in self.panes.values_mut() {
                 pane.info = pane.session.process_info();
+                pane.project = project_of(pane.info.cwd.as_deref());
             }
             self.info_refreshed = Instant::now();
         }
+        self.update_agents();
+    }
+
+    /// ¿El usuario está viendo este panel? (pestaña activa y ventana con foco)
+    fn pane_visible(&self, pane: PaneId) -> bool {
+        self.focused && !self.occluded && self.tabs.get(self.active).is_some_and(|t| t.root.contains(pane))
+    }
+
+    /// Nombre corto del agente de un panel.
+    fn agent_name(&self, pane: PaneId) -> String {
+        self.panes
+            .get(&pane)
+            .and_then(|p| p.title().1)
+            .map(|p| p.name().to_string())
+            .unwrap_or_else(|| "El agente".into())
+    }
+
+    /// Aviso de macOS cuando un agente pasa a esperarte o termina sin que lo veas.
+    fn notify_agent(&self, pane: PaneId, before: Option<AgentState>) {
+        let Some(p) = self.panes.get(&pane) else { return };
+        let Some(a) = &p.agent else { return };
+        if !a.unseen || before == Some(a.state) {
+            return;
+        }
+        let name = self.agent_name(pane);
+        let what = a.detail.clone().or_else(|| a.task.clone()).unwrap_or_default();
+        let body = match a.state {
+            AgentState::Waiting => format!("{name} te espera en {}. {what}", p.project),
+            AgentState::Done => format!("{name} ha terminado en {}. {what}", p.project),
+            AgentState::Working => return,
+        };
+        notify("forge", body.trim_end_matches(". "));
+        if let Some(g) = &self.gfx {
+            g.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
+        }
+    }
+
+    /// Evento de un hook de Claude Code.
+    fn on_hook(&mut self, msg: agents::HookMsg) {
+        let visible = self.pane_visible(msg.pane);
+        let Some(p) = self.panes.get_mut(&msg.pane) else { return };
+        let before = p.agent.as_ref().filter(|a| a.from_hooks).map(|a| a.state);
+        p.agent = agents::apply_hook(p.agent.take(), msg.event, visible);
+        self.notify_agent(msg.pane, before);
+        self.redraw();
+    }
+
+    /// Heurística para agentes sin hooks y marcas de "visto".
+    fn update_agents(&mut self) {
+        let ids: Vec<PaneId> = self.panes.keys().copied().collect();
+        let mut any = false;
+        for id in ids {
+            let visible = self.pane_visible(id);
+            let Some(p) = self.panes.get_mut(&id) else { continue };
+            if visible && let Some(a) = p.agent.as_mut() {
+                a.unseen = false;
+            }
+            let provider = p.title().1;
+            let running_ai = provider.is_some();
+            if p.agent.as_ref().is_some_and(|a| a.from_hooks) {
+                any = true;
+                continue;
+            }
+            // Claude informa por hooks: hasta el primer evento no se adivina nada
+            // (si no, un Claude recién abierto saldría como "te espera").
+            if provider == Some(Provider::Claude) && self.claude_settings.is_some() {
+                p.agent = None;
+                continue;
+            }
+            if !running_ai {
+                p.agent = None;
+                continue;
+            }
+            any = true;
+            let before = p.agent.as_ref().map(|a| (a.state, a.since));
+            let idle = p.session.idle_for();
+            p.agent = Some(agents::heuristic(p.agent.take(), idle, visible));
+            // Solo avisar si trabajó un rato (no por un parpadeo de salida).
+            if let Some((AgentState::Working, since)) = before
+                && since.elapsed() >= Duration::from_secs(5)
+            {
+                self.notify_agent(id, Some(AgentState::Working));
+            }
+        }
+        self.tick_needed.store(any, Ordering::Relaxed);
+    }
+
+    /// Orden de las pestañas en pantalla: agrupadas por proyecto.
+    fn display_order(&self) -> Vec<usize> {
+        let project = |t: &Tab| self.panes.get(&t.focus).map(|p| p.project.clone()).unwrap_or_default();
+        let mut groups: Vec<String> = Vec::new();
+        for t in &self.tabs {
+            let pr = project(t);
+            if !groups.contains(&pr) {
+                groups.push(pr);
+            }
+        }
+        let mut order = Vec::with_capacity(self.tabs.len());
+        for g in &groups {
+            order.extend(self.tabs.iter().enumerate().filter(|(_, t)| &project(t) == g).map(|(i, _)| i));
+        }
+        order
+    }
+
+    /// Agentes para la bandeja, del más urgente al menos.
+    fn inbox_items(&self) -> Vec<(PaneId, ui::InboxItem)> {
+        let mut v: Vec<(u8, Instant, PaneId, ui::InboxItem)> = self
+            .panes
+            .iter()
+            .filter_map(|(id, p)| {
+                let a = p.agent.as_ref()?;
+                let rank = match (a.state, a.unseen) {
+                    (AgentState::Waiting, true) => 0,
+                    (AgentState::Waiting, false) => 1,
+                    (AgentState::Done, true) => 2,
+                    (AgentState::Working, _) => 3,
+                    (AgentState::Done, false) => 4,
+                };
+                let (name, ai) = p.title();
+                let title = a.task.clone().unwrap_or(name);
+                let detail = a.detail.clone().unwrap_or_else(|| state_text(a.state).into());
+                let item = ui::InboxItem {
+                    title,
+                    detail,
+                    project: p.project.clone(),
+                    state: a.state,
+                    ai,
+                    elapsed: ago(a.since),
+                    unseen: a.unseen,
+                };
+                Some((rank, a.since, *id, item))
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        v.into_iter().map(|(_, _, id, it)| (id, it)).collect()
+    }
+
+    /// Agentes que necesitan tu atención (te esperan o terminaron sin verlos).
+    fn attention(&self) -> usize {
+        self.panes
+            .values()
+            .filter_map(|p| p.agent.as_ref())
+            .filter(|a| a.state == AgentState::Waiting || (a.state == AgentState::Done && a.unseen))
+            .count()
+    }
+
+    /// Lleva al usuario al panel: su pestaña, foco y marca como visto.
+    fn go_to_pane(&mut self, pane: PaneId) {
+        if let Some(ti) = self.tabs.iter().position(|t| t.root.contains(pane)) {
+            self.select_tab(ti);
+            self.set_focus(pane);
+        }
+        if let Some(a) = self.panes.get_mut(&pane).and_then(|p| p.agent.as_mut()) {
+            a.unseen = false;
+        }
+        self.inbox = None;
+        self.redraw();
+    }
+
+    /// Teclas con la bandeja abierta. Devuelve si la consumió.
+    fn inbox_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        let Some(sel) = self.inbox else { return false };
+        let n = self.inbox_items().len();
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => self.inbox = None,
+            Key::Named(NamedKey::ArrowDown) if n > 0 => self.inbox = Some((sel + 1) % n),
+            Key::Named(NamedKey::ArrowUp) if n > 0 => self.inbox = Some((sel + n - 1) % n),
+            Key::Named(NamedKey::Enter) => {
+                if let Some((pane, _)) = self.inbox_items().into_iter().nth(sel) {
+                    self.go_to_pane(pane);
+                }
+            }
+            _ => {}
+        }
+        self.redraw();
+        true
     }
 
     fn tab_views(&self) -> Vec<TabView> {
-        self.tabs
-            .iter()
+        self.display_order()
+            .into_iter()
             .enumerate()
-            .filter_map(|(i, t)| {
-                let pane = self.panes.get(&t.focus)?;
-                let (title, ai) = pane.title();
-                let mut subtitle = pane.info.cwd.as_deref().map(tilde).unwrap_or_default();
+            .filter_map(|(pos, i)| {
+                let t = &self.tabs[i];
+                let focus = self.panes.get(&t.focus)?;
+                // La pestaña muestra su agente más urgente (o el panel con foco).
+                let urgency = |a: &AgentStatus| match (a.state, a.unseen) {
+                    (AgentState::Waiting, _) => 0,
+                    (AgentState::Done, true) => 1,
+                    (AgentState::Working, _) => 2,
+                    (AgentState::Done, false) => 3,
+                };
+                let agent_pane = t
+                    .root
+                    .leaves()
+                    .into_iter()
+                    .filter_map(|id| self.panes.get(&id))
+                    .filter(|p| p.agent.is_some())
+                    .min_by_key(|p| p.agent.as_ref().map(urgency).unwrap_or(9));
+                let pane = agent_pane.unwrap_or(focus);
+                let (name, ai) = pane.title();
                 let n = t.root.leaves().len();
-                if n > 1 {
-                    subtitle = format!("{subtitle} · {n} paneles");
-                }
-                Some(TabView { title, subtitle, ai, active: i == self.active })
+                let (title, subtitle, state, unseen, elapsed) = match &pane.agent {
+                    Some(a) => (
+                        a.task.clone().unwrap_or(name),
+                        a.detail.clone().unwrap_or_else(|| state_text(a.state).into()),
+                        Some(a.state),
+                        a.unseen,
+                        Some(ago(a.since)),
+                    ),
+                    None => {
+                        let mut sub = pane.info.cwd.as_deref().map(tilde).unwrap_or_default();
+                        if n > 1 {
+                            sub = format!("{sub} · {n} paneles");
+                        }
+                        (name, sub, None, false, None)
+                    }
+                };
+                Some(TabView {
+                    index: i,
+                    shortcut: (pos < 9).then_some(pos + 1),
+                    title,
+                    subtitle,
+                    project: focus.project.clone(),
+                    ai,
+                    state,
+                    unseen,
+                    elapsed,
+                    active: i == self.active,
+                })
             })
             .collect()
     }
@@ -1025,6 +1343,12 @@ impl App {
         }
         let Some(layout) = self.layout() else { return };
         let views = self.tab_views();
+        let attention = self.attention();
+        let tick = (self.started.elapsed().as_millis() / 400) as u64;
+        let inbox = self.inbox.map(|sel| {
+            let items: Vec<ui::InboxItem> = self.inbox_items().into_iter().map(|(_, it)| it).collect();
+            (sel.min(items.len().saturating_sub(1)), items)
+        });
         // Al cambiar el asistente de la pestaña activa, el panel muestra el suyo.
         let tab_ai = self.tab_ai();
         if tab_ai != self.last_tab_ai {
@@ -1108,7 +1432,7 @@ impl App {
         }
 
         // Título de la ventana: el del panel activo.
-        if let Some(v) = views.get(self.active) {
+        if let Some(v) = views.iter().find(|v| v.index == self.active) {
             let title = if v.subtitle.is_empty() {
                 format!("{} — forge", v.title)
             } else {
@@ -1138,7 +1462,7 @@ impl App {
             })
             .flatten();
         if let Some(area) = layout.left {
-            ui::draw_left(&mut ui, area, &views, ai, self.hover);
+            ui::draw_left(&mut ui, area, &views, ai, attention, tick, self.hover);
         }
         if let Some(area) = layout.right {
             ui::draw_right(&mut ui, area, &usage, self.usage_sel, self.hover, Utc::now());
@@ -1147,6 +1471,10 @@ impl App {
             && let Some((_, area)) = pane_areas.iter().find(|(id, _)| *id == tab.focus)
         {
             ui::draw_search(&mut overlay, *area, &s.query, s.found);
+        }
+        if let Some((sel, items)) = &inbox {
+            let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
+            ui::draw_inbox(&mut overlay, screen, items, *sel, tick, self.hover);
         }
         rects.extend(ui.rects.iter().copied());
         labels.append(&mut ui.labels);
@@ -1178,6 +1506,15 @@ impl App {
             }) {
                 self.selected_block = Some((focus, *id));
             }
+        }
+        // `FORGE_CAPTURE_INBOX`: abre la bandeja de agentes antes de capturar.
+        if capture::target().is_some()
+            && self.inbox.is_none()
+            && std::env::var_os("FORGE_CAPTURE_INBOX").is_some()
+            && self.started.elapsed() + Duration::from_millis(800) > capture::delay()
+        {
+            self.inbox = Some(0);
+            gfx.window.request_redraw();
         }
         // `FORGE_SEARCH=texto` abre la búsqueda en modo captura, para verla.
         if capture::target().is_some()
@@ -1233,6 +1570,27 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         }
+        // Canal de hooks de Claude Code (antes de abrir sesiones: va en su entorno).
+        let proxy = self.proxy.clone();
+        self.agent_socket = agents::start_server(move |m| {
+            let _ = proxy.send_event(UserEvent::Hook(m));
+        });
+        if let Ok(exe) = std::env::current_exe() {
+            self.claude_settings = agents::write_claude_settings(&exe);
+        }
+        // Latido para animaciones y la heurística de agentes (solo si hay agentes).
+        let (need, wake) = (self.tick_needed.clone(), self.waker());
+        std::thread::Builder::new()
+            .name("tick".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(400));
+                    if need.load(Ordering::Relaxed) {
+                        wake();
+                    }
+                }
+            })
+            .ok();
         if !self.open_tab(PaneKind::Shell) {
             event_loop.exit();
             return;
@@ -1270,6 +1628,12 @@ impl ApplicationHandler<UserEvent> for App {
         window.request_redraw();
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(sock) = &self.agent_socket {
+            agents::cleanup(sock);
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Type(text) => {
@@ -1278,6 +1642,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Config(c) => self.apply_config(*c),
+            UserEvent::Hook(m) => self.on_hook(m),
             UserEvent::Wake => {
                 self.wake_pending.store(false, Ordering::Release);
                 // Las sesiones se atienden aunque la ventana no se vea
@@ -1319,6 +1684,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.handle_action(a, event_loop);
                     return;
                 }
+                if self.inbox.is_some() && self.inbox_key(&event) {
+                    return;
+                }
                 if self.selected_block.is_some() && event.logical_key == Key::Named(NamedKey::Escape) {
                     self.selected_block = None;
                     self.redraw();
@@ -1357,6 +1725,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
+                if self.inbox.is_some()
+                    && !matches!(
+                        ui::hit_at(&self.hits, self.cursor.0, self.cursor.1),
+                        Some(Hit::InboxItem(_))
+                    )
+                {
+                    self.inbox = None;
+                    self.redraw();
+                    return;
+                }
                 self.mouse_press(button, event_loop)
             }
             WindowEvent::MouseInput { state: ElementState::Released, button, .. } => {
@@ -1375,7 +1753,22 @@ fn right_panel_visible(manual: Option<bool>, tab_has_ai: bool) -> bool {
     manual.unwrap_or(tab_has_ai)
 }
 
+/// Texto del estado de un agente.
+fn state_text(s: AgentState) -> &'static str {
+    match s {
+        AgentState::Working => "Trabajando…",
+        AgentState::Waiting => "Te espera",
+        AgentState::Done => "Terminado",
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    // `forge-app hook`: lo invocan los hooks de Claude Code.
+    if std::env::args().nth(1).as_deref() == Some("hook") {
+        agents::run_hook_client();
+        return Ok(());
+    }
+    clean_inherited_env();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App::new(event_loop.create_proxy(), Config::load());
@@ -1407,7 +1800,12 @@ mod tests {
     fn ai_command_quotes_prompt_path() {
         let path = std::path::Path::new("/tmp/it's here/p.txt");
         let c = ai_command_with_prompt(Provider::Claude, path);
-        assert!(c.contains(r#"claude "$(cat '/tmp/it'\''s here/p.txt')""#), "{c}");
+        assert!(
+            c.contains(r#"claude --settings "$FORGE_CLAUDE_SETTINGS" "$(cat '/tmp/it'\''s here/p.txt')""#),
+            "{c}"
+        );
+        // Sin forge (variable vacía) el comando queda como `claude "<pregunta>"`.
+        assert!(ai_command(Provider::Codex.command()).contains("then codex;"));
         let g = ai_command_with_prompt(Provider::Gemini, path);
         assert!(g.contains("gemini -i"), "{g}");
         // Comprobado con sh: la comilla del nombre no rompe el comando.
@@ -1417,6 +1815,35 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), path.to_string_lossy());
+    }
+
+    /// El comando de lanzar Claude debe pasar `--settings` y la ruta como dos
+    /// argumentos en zsh y en sh (zsh no parte `${VAR:+...}` en palabras).
+    #[test]
+    fn claude_launch_args_in_zsh_and_sh() {
+        let dir = std::env::temp_dir().join(format!("forge-fake-claude-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(&fake, "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+        for shell in ["/bin/zsh", "/bin/sh"] {
+            if !std::path::Path::new(shell).exists() {
+                continue;
+            }
+            let run = |settings: Option<&str>| {
+                let mut c = std::process::Command::new(shell);
+                c.arg("-c").arg(launch("claude", "\"hola mundo\"")).env("PATH", &path);
+                match settings {
+                    Some(v) => c.env("FORGE_CLAUDE_SETTINGS", v),
+                    None => c.env_remove("FORGE_CLAUDE_SETTINGS"),
+                };
+                String::from_utf8_lossy(&c.output().unwrap().stdout).into_owned()
+            };
+            assert_eq!(run(Some("/x y/hooks.json")), "[--settings][/x y/hooks.json][hola mundo]", "{shell}");
+            assert_eq!(run(None), "[hola mundo]", "{shell}");
+        }
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

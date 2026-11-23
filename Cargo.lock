@@ -848,6 +848,7 @@ dependencies = [
  "png",
  "pollster",
  "serde",
+ "serde_json",
  "toml",
  "wgpu",
  "winit",
