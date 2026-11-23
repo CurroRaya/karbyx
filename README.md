@@ -153,7 +153,9 @@ Es la pantalla con la que abre forge.
   la carpeta, sin worktree.
 - **Columnas**: *Trabajando*, *Te necesita*, *Para revisar* y *Hecho hoy*.
   Cada tarjeta muestra la tarea, el proyecto y la rama, lo que hace ahora,
-  las últimas líneas de su terminal, sus `+/−` y sus tokens.
+  una **miniatura en vivo de su terminal** (un minimapa con los colores
+  reales: se ve si está escribiendo código, pasando tests o con un diff en
+  pantalla), su última línea, sus `+/−` y sus tokens.
 - **Responder sin entrar**: cuando un agente te pide permiso («¿Aplico este
   cambio en login.rs?»), su tarjeta muestra la pregunta y un botón por opción
   (*Sí*, *Sí, siempre*, *No*). Un clic, o la tecla 1-3 con la tarjeta

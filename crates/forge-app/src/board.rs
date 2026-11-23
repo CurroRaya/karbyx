@@ -21,6 +21,7 @@ use crate::panes::PaneId;
 use crate::ui::{self, Align, Area, Hit, Rgb, Ui};
 use crate::usage::UsageState;
 use crate::worktree;
+use forge_term::{CellView, Snapshot};
 
 /// Cada cuánto se recalculan los +/− de los worktrees con la mesa a la vista.
 const STATS_EVERY: Duration = Duration::from_secs(3);
@@ -72,6 +73,76 @@ pub struct Card {
     pub unseen: bool,
     /// Pregunta con opciones que el agente tiene en pantalla.
     pub choice: Option<Choice>,
+    /// Miniatura en vivo de su terminal.
+    pub thumb: Thumb,
+}
+
+/// Un tramo de una fila de la miniatura: `len` celdas desde `start`, del
+/// color del texto (o del fondo, si `bg`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Run {
+    pub start: u16,
+    pub len: u16,
+    pub color: Rgb,
+    pub bg: bool,
+}
+
+/// Miniatura de una terminal: sus últimas filas con contenido, como tramos
+/// de color (un minimapa), y el cursor.
+#[derive(Debug, Clone, Default)]
+pub struct Thumb {
+    pub cols: usize,
+    pub rows: Vec<Vec<Run>>,
+    pub cursor: Option<(usize, usize)>,
+}
+
+/// Tramos de una fila: fondos distintos del de la terminal y texto.
+pub fn row_runs(row: &[CellView], background: Rgb) -> Vec<Run> {
+    let mut v = Vec::new();
+    let mut push = |start: usize, end: usize, color: Rgb, bg: bool| {
+        v.push(Run { start: start as u16, len: (end - start) as u16, color, bg });
+    };
+    let mut c = 0;
+    while c < row.len() {
+        let bg = row[c].bg;
+        let start = c;
+        while c < row.len() && row[c].bg == bg {
+            c += 1;
+        }
+        if bg != background {
+            push(start, c, bg, true);
+        }
+    }
+    let ink = |cell: &CellView| cell.spacer || !(cell.c == ' ' || cell.c == '\0');
+    let mut c = 0;
+    while c < row.len() {
+        if !ink(&row[c]) {
+            c += 1;
+            continue;
+        }
+        let fg = row[c].fg;
+        let start = c;
+        while c < row.len() && ink(&row[c]) && (row[c].spacer || row[c].fg == fg) {
+            c += 1;
+        }
+        push(start, c, fg, false);
+    }
+    v
+}
+
+/// Miniatura de la pantalla: como mucho `max_rows` filas, acabando en la
+/// última con contenido (o en el cursor).
+pub fn thumb(snap: &Snapshot, max_rows: usize) -> Thumb {
+    let rows: Vec<Vec<Run>> = (0..snap.rows).map(|r| row_runs(snap.row(r), snap.background)).collect();
+    let cursor = snap.cursor.visible.then_some(snap.cursor.row);
+    let last = rows.iter().rposition(|r| !r.is_empty()).max(cursor);
+    let Some(last) = last else { return Thumb { cols: snap.cols, ..Thumb::default() } };
+    let first = (last + 1).saturating_sub(max_rows);
+    Thumb {
+        cols: snap.cols,
+        cursor: cursor.filter(|r| (first..=last).contains(r)).map(|r| (r - first, snap.cursor.col)),
+        rows: rows[first..=last].to_vec(),
+    }
 }
 
 /// Un menú de opciones del asistente («Do you want to…? ❯ 1. Yes  2. No»).
@@ -304,7 +375,7 @@ impl App {
                     project: p.project.clone(),
                     branch: p.worktree.as_ref().map(|w| w.name().to_string()),
                     detail,
-                    preview: preview_lines(&tail, 3),
+                    preview: preview_lines(&tail, 1),
                     stats: self.board.stats.get(&id).copied(),
                     elapsed: a.map(|a| ago(a.since)).unwrap_or_default(),
                     tokens,
@@ -312,6 +383,7 @@ impl App {
                     ai,
                     unseen: a.is_some_and(|a| a.unseen),
                     choice,
+                    thumb: thumb(&p.session.snapshot(), 48),
                 });
             }
         }
@@ -792,7 +864,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
             continue;
         }
         let cards = &v.columns[i];
-        let card_h = ui.s(150.0);
+        let card_h = ui.s(204.0);
         let fit = (((bottom - cy) / (card_h + ui.s(12.0))).floor() as usize).max(1);
         for (k, c) in cards.iter().enumerate() {
             if k + 1 == fit && cards.len() > fit {
@@ -859,6 +931,40 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
             ui.hit(chip, Hit::BoardShell(s.pane));
             chip_x += chip_w + ui.s(8.0);
         }
+    }
+}
+
+/// Pinta la miniatura de una terminal dentro de `a`: cada tramo de texto es
+/// una barra de su color; los fondos, bloques tenues.
+fn draw_thumb(ui: &mut Ui, a: Area, t: &Thumb, tick: u64) {
+    ui.round(a, PREVIEW_BG, 1.0, 6.0);
+    let pad = ui.s(6.0);
+    let inner = Area::new(a.x + pad, a.y + pad, a.w - 2.0 * pad, a.h - 2.0 * pad);
+    if t.cols == 0 || t.rows.is_empty() {
+        return;
+    }
+    let cw = inner.w / t.cols as f32;
+    let rh = ui.s(3.0).max(2.0);
+    let fit = ((inner.h / rh).floor() as usize).max(1);
+    let skip = t.rows.len().saturating_sub(fit);
+    for (i, row) in t.rows.iter().skip(skip).enumerate() {
+        let y = inner.y + i as f32 * rh;
+        for r in row {
+            let x = inner.x + r.start as f32 * cw;
+            let w = (r.len as f32 * cw).max(1.0);
+            if r.bg {
+                ui.tint(Area::new(x, y, w, rh), r.color, 0.55);
+            } else {
+                ui.tint(Area::new(x, y + rh * 0.2, w, (rh * 0.6).max(1.0)), r.color, 0.6);
+            }
+        }
+    }
+    if let Some((row, col)) = t.cursor
+        && row >= skip
+        && tick.is_multiple_of(2)
+    {
+        let y = inner.y + (row - skip) as f32 * rh;
+        ui.tint(Area::new(inner.x + col as f32 * cw, y, cw.max(ui.s(1.5)), rh), EMBER, 0.9);
     }
 }
 
@@ -961,18 +1067,21 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
             );
             ui.hit(b, Hit::BoardAnswer(c.pane, k as u8));
         }
+        // Debajo, lo que hay en su pantalla, para decidir con contexto.
+        let tv = Area::new(a.x + px, a.y + ui.s(116.0), iw, ui.s(56.0));
+        draw_thumb(ui, tv, &c.thumb, tick);
     } else {
-        // Lo que hace ahora y las últimas líneas de su terminal.
+        // Lo que hace ahora, su pantalla en miniatura y su última línea.
         let dcolor = if col == 1 { HOT } else { ui::TEXT };
         ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), iw, 11.5, dcolor, false, Align::Left);
-        let pv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(48.0));
-        ui.round(pv, PREVIEW_BG, 1.0, 6.0);
-        for (k, l) in c.preview.iter().enumerate() {
+        let tv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(84.0));
+        draw_thumb(ui, tv, &c.thumb, tick);
+        if let Some(l) = c.preview.last() {
             ui.text(
                 l,
-                pv.x + ui.s(8.0),
-                pv.y + ui.s(4.0) + k as f32 * ui.s(14.0),
-                pv.w - ui.s(16.0),
+                tv.x + ui.s(2.0),
+                tv.bottom() + ui.s(5.0),
+                tv.w - ui.s(4.0),
                 10.0,
                 ui::DIM,
                 false,
@@ -1023,6 +1132,36 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cells(text: &str, fg: Rgb) -> Vec<CellView> {
+        text.chars()
+            .map(|c| CellView {
+                c,
+                fg,
+                bg: [0, 0, 0],
+                bold: false,
+                italic: false,
+                underline: false,
+                strikeout: false,
+                wide: false,
+                spacer: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn thumbnail_runs() {
+        let mut row = cells("ab  cd", [1, 1, 1]);
+        row[4].fg = [2, 2, 2];
+        row[5].fg = [2, 2, 2];
+        row[1].bg = [9, 9, 9];
+        let runs = row_runs(&row, [0, 0, 0]);
+        let bg = Run { start: 1, len: 1, color: [9, 9, 9], bg: true };
+        let a = Run { start: 0, len: 2, color: [1, 1, 1], bg: false };
+        let b = Run { start: 4, len: 2, color: [2, 2, 2], bg: false };
+        assert_eq!(runs, [bg, a, b]);
+        assert!(row_runs(&cells("    ", [1, 1, 1]), [0, 0, 0]).is_empty());
+    }
 
     #[test]
     fn parses_permission_menu() {
