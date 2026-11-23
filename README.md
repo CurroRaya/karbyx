@@ -61,6 +61,20 @@ cargo install --path crates/forge-usage    # CLI de consumo → ~/.cargo/bin/for
 
 La primera compilación tarda unos minutos; las siguientes, segundos.
 
+### Como app de macOS (Dock y Launchpad)
+
+```bash
+scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
+```
+
+Crea `target/release/Forge.app`, con su icono y firmada para este Mac, y con
+`--install` la copia a `~/Applications`. Desde ahí la abres con Spotlight
+(⌘Espacio, «forge») o la anclas al Dock. Sin `--install` solo la crea. Para
+actualizarla, vuelve a ejecutar el mismo comando tras `git pull`.
+
+Abierta desde el Dock, forge empieza en tu carpeta personal y toma el idioma
+de macOS (`LANG`), como Terminal.
+
 ## Ejecutar
 
 Una vez instalado, desde cualquier terminal:
@@ -79,9 +93,8 @@ cargo run --release -p forge-app
 cargo run --release -p forge-usage -- watch
 ```
 
-Por ahora forge no se distribuye como aplicación `.app`, así que se lanza
-desde una terminal. Si quieres poder cerrar esa terminal sin que se cierre
-forge, lánzalo desvinculado:
+Si lo lanzas desde una terminal y quieres poder cerrarla sin que se cierre
+forge, lánzalo desvinculado (o usa la [app](#como-app-de-macos-dock-y-launchpad)):
 
 ```bash
 forge-app &!
@@ -100,6 +113,7 @@ cargo install --path crates/forge-usage
 
 ```bash
 cargo uninstall forge-app forge-usage
+rm -rf ~/Applications/Forge.app                  # si instalaste la app
 rm -rf ~/.config/forge ~/Library/Caches/forge   # configuración y caché (opcional)
 ```
 

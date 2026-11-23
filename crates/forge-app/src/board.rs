@@ -609,7 +609,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
     let logo = Area::new(x, y + ui.s(9.0), ui.s(26.0), ui.s(26.0));
     ui.glow(logo, EMBER, 0.35, 7.0, 12.0);
     ui.gradient(logo, (HOT, 1.0), (EMBER_DEEP, 1.0), 7.0);
-    ui.text("f", logo.x, logo.y + ui.s(2.0), logo.w, 15.0, ON_EMBER, true, Align::Center);
+    ui.text("❯", logo.x, logo.y + ui.s(3.0), logo.w, 14.0, ON_EMBER, true, Align::Center);
     ui.text(
         "forge",
         logo.right() + ui.s(10.0),

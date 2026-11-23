@@ -394,7 +394,7 @@ pub fn draw_left(
     let logo = Area::new(area.x + pad, y + ui.s(2.0), ui.s(20.0), ui.s(20.0));
     ui.glow(logo, EMBER, 0.3, 5.0, 8.0);
     ui.gradient(logo, (HOT, 1.0), ([0xd2, 0x5f, 0x2c], 1.0), 5.0);
-    ui.text("f", logo.x, logo.y + ui.s(1.0), logo.w, 12.0, [0x1c, 0x12, 0x0b], true, Align::Center);
+    ui.text("❯", logo.x, logo.y + ui.s(2.0), logo.w, 11.0, [0x1c, 0x12, 0x0b], true, Align::Center);
     ui.text("forge", logo.right() + ui.s(8.0), y + ui.s(2.0), ui.s(70.0), 14.0, TEXT, true, Align::Left);
     let mesa = Area::new(area.right() - pad - ui.s(84.0), y, ui.s(84.0), ui.s(24.0));
     let mh = hover == Some(Hit::OpenBoard);

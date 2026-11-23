@@ -98,6 +98,36 @@ fn clean_inherited_env() {
     }
 }
 
+/// Lanzada desde el Finder o el Dock, la app no hereda el entorno de una
+/// shell: sin `LANG` las terminales no verían la ñ ni los acentos. Se completa
+/// con el idioma de macOS, como hace Terminal.
+fn complete_gui_env() {
+    let lang_set =
+        ["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty()));
+    if !lang_set {
+        let apple = std::process::Command::new("/usr/bin/defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default();
+        let lang = gui_lang(&apple, |l| std::path::Path::new("/usr/share/locale").join(l).exists());
+        // SAFETY: se llama al principio de `main`, antes de crear ningún hilo.
+        unsafe { std::env::set_var("LANG", lang) };
+    }
+    if std::env::var_os("SHELL").is_none_or(|s| s.is_empty()) {
+        // SAFETY: igual que arriba.
+        unsafe { std::env::set_var("SHELL", "/bin/zsh") };
+    }
+}
+
+/// `LANG` a partir de `AppleLocale` («es_ES», «es_ES@rg=eszzzz»...).
+fn gui_lang(apple: &str, exists: impl Fn(&str) -> bool) -> String {
+    let base = apple.trim().split('@').next().unwrap_or_default();
+    let want = format!("{base}.UTF-8");
+    if !base.is_empty() && exists(&want) { want } else { "en_US.UTF-8".into() }
+}
+
 /// Comando de una sesión de asistente que arranca con una pregunta inicial
 /// leída de `prompt` (un archivo, para no tener problemas de comillas).
 fn ai_command_with_prompt(p: Provider, prompt: &std::path::Path) -> String {
@@ -2095,6 +2125,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     clean_inherited_env();
+    complete_gui_env();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App::new(event_loop.create_proxy(), Config::load());
@@ -2105,6 +2136,15 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gui_lang_from_apple_locale() {
+        let all = |_: &str| true;
+        assert_eq!(gui_lang("es_ES\n", all), "es_ES.UTF-8");
+        assert_eq!(gui_lang("es_ES@rg=eszzzz", all), "es_ES.UTF-8");
+        assert_eq!(gui_lang("", all), "en_US.UTF-8");
+        assert_eq!(gui_lang("xx_YY", |_| false), "en_US.UTF-8");
+    }
 
     #[test]
     fn ask_prompt_includes_command_output_and_code() {
