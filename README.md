@@ -138,6 +138,8 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | ⌘I | Preguntar a la IA por el bloque seleccionado o el último que falló |
 | ⌘J | Bandeja de agentes: los que te esperan primero; ↑↓ y ↵ para ir a uno |
 | ⌘U | Panel de mando: consumo de todos los asistentes y agentes abiertos |
+| ⌘⇧A | Agente nuevo en su propio worktree de git |
+| ⌘R | Revisar cambios: diff del agente (fusionar ↵, descartar ⌫) o de la terminal |
 | ⌘K | Limpiar pantalla |
 | ⌘Q | Salir |
 
@@ -188,6 +190,28 @@ Sin indicar terminal, usan la que tienes delante o la última que usaste.
 permite estas herramientas sin preguntar (compruébalo con `/mcp`). Para otros
 clientes MCP, añade un servidor stdio con el comando `forge-app mcp`; solo
 funciona dentro de una terminal de forge.
+
+### Un worktree por agente y revisión de cambios
+
+Para que varios agentes trabajen en el mismo proyecto sin pisarse, **⌘⇧A**
+abre el agente en su **propio worktree de git**: una copia del repositorio en
+`<proyecto>.worktrees/agente-N`, junto al proyecto, con su rama
+`forge/agente-N` creada desde el último commit (lo que tengas sin commit no
+se lleva). La barra lateral lo marca con `⎇ agente-N`.
+
+**⌘R** abre el panel **Revisar cambios** del panel activo: la lista de
+archivos tocados con sus `+/−` y el diff de cada uno, que se actualiza solo
+mientras el agente trabaja. En un agente con worktree:
+
+- **↵ Fusionar** guarda en un commit lo pendiente (con la tarea del agente
+  como mensaje) y lo fusiona en la rama actual del proyecto. Si hay
+  conflictos no se toca nada y te lo dice.
+- **⌫ Descartar** (dos veces, para confirmar) cierra el agente y borra su
+  worktree y su rama.
+
+En cualquier otra terminal dentro de un repositorio, ⌘R muestra lo que hay
+sin commit. Si cierras el agente sin fusionar, el worktree se queda: abre una
+terminal en esa carpeta y ⌘R lo vuelve a encontrar.
 
 ### Bloques de comandos (estilo Warp)
 
@@ -278,6 +302,7 @@ FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app 
 FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
 FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
 FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
+FORGE_CAPTURE_WORKTREE=1 FORGE_CAPTURE_AI=1 FORGE_CAPTURE_REVIEW=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # agente en worktree y panel ⌘R
 echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
 FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
 ```

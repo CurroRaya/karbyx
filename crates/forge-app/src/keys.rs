@@ -46,6 +46,10 @@ pub enum Action {
     Inbox,
     /// Panel de mando: consumo de todos los asistentes y agentes abiertos.
     Dashboard,
+    /// Agente nuevo en su propio worktree de git.
+    NewAgent,
+    /// Revisar los cambios (diff) del panel activo.
+    Review,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -78,6 +82,8 @@ const NAMES: &[(&str, Action)] = &[
     ("ask_ai", Action::AskAi),
     ("inbox", Action::Inbox),
     ("dashboard", Action::Dashboard),
+    ("new_agent", Action::NewAgent),
+    ("review", Action::Review),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -112,6 +118,8 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("ask_ai", "cmd+i"),
     ("inbox", "cmd+j"),
     ("dashboard", "cmd+u"),
+    ("new_agent", "cmd+shift+a"),
+    ("review", "cmd+r"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

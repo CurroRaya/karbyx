@@ -15,6 +15,7 @@ use forge_ai::Provider;
 use crate::agents::AgentState;
 
 use crate::usage::{DAYS, LimitView, UsageState, UsageView};
+use crate::worktree::{FileDiff, LineKind};
 
 pub type Rgb = [u8; 3];
 
@@ -121,6 +122,12 @@ pub enum Hit {
     InboxItem(usize),
     /// Fila de agente en el panel de mando.
     DashAgent(usize),
+    /// Archivo en el panel de revisión.
+    ReviewFile(usize),
+    ReviewMerge,
+    ReviewDiscard,
+    /// El propio panel de revisión (un clic dentro no lo cierra).
+    ReviewBox,
 }
 
 /// Color de cada asistente.
@@ -1124,6 +1131,263 @@ pub fn draw_dashboard(
         false,
         Align::Left,
     );
+}
+
+// ---------- revisar cambios (⌘R) ----------
+
+/// Lo que necesita el panel de revisión para pintarse.
+pub struct ReviewView<'a> {
+    pub project: &'a str,
+    /// Rama del agente (`forge/agente-1`) si trabaja en un worktree.
+    pub branch: Option<&'a str>,
+    pub target: &'a str,
+    pub files: Option<Result<&'a [FileDiff], &'a str>>,
+    pub sel: usize,
+    pub scroll: usize,
+    pub confirm_discard: bool,
+    pub message: Option<(&'a str, bool)>,
+    pub busy: bool,
+}
+
+fn status_color(s: char) -> Rgb {
+    match s {
+        'A' => GREEN,
+        'D' => RED,
+        'R' => ACCENT,
+        _ => YELLOW,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mono(ui: &mut Ui, text: impl Into<String>, x: f32, y: f32, w: f32, pt: f32, color: Rgb, align: Align) {
+    ui.text(text, x, y, w, pt, color, false, align);
+    if let Some(l) = ui.labels.last_mut() {
+        l.font = Font::Mono;
+    }
+}
+
+/// Botón con texto; devuelve su caja.
+#[allow(clippy::too_many_arguments)]
+fn button(
+    ui: &mut Ui,
+    label: &str,
+    right: f32,
+    y: f32,
+    w: f32,
+    color: Rgb,
+    hit: Hit,
+    hover: Option<Hit>,
+) -> f32 {
+    let h = ui.s(26.0);
+    let b = Area::new(right - w, y, w, h);
+    let bg = if hover == Some(hit) { ACTIVE_BG } else { HOVER_BG };
+    ui.fill(Area::new(b.x - 1.0, b.y - 1.0, b.w + 2.0, b.h + 2.0), BORDER);
+    ui.fill(b, bg);
+    ui.text(label, b.x, b.y + ui.s(5.0), b.w, 12.0, color, true, Align::Center);
+    ui.hit(b, hit);
+    b.x
+}
+
+/// Panel a pantalla casi completa con el diff. Devuelve cuántas filas de
+/// diff caben (para avanzar página).
+pub fn draw_review(ui: &mut Ui, screen: Area, v: &ReviewView, hover: Option<Hit>) -> usize {
+    ui.tint(screen, [0, 0, 0], 0.55);
+    let margin = ui.s(28.0);
+    let w = (screen.w - 2.0 * margin).min(ui.s(1500.0));
+    let h = screen.h - 2.0 * margin;
+    let bx = Area::new(screen.x + (screen.w - w) / 2.0, screen.y + margin, w, h);
+    ui.fill(Area::new(bx.x - 1.0, bx.y - 1.0, bx.w + 2.0, bx.h + 2.0), BORDER);
+    ui.fill(bx, PANEL_BG);
+
+    let pad = ui.s(22.0);
+    let x = bx.x + pad;
+    let iw = bx.w - 2.0 * pad;
+    let mut y = bx.y + ui.s(18.0);
+
+    // Cabecera: qué se revisa y botones.
+    ui.text("REVISAR CAMBIOS", x, y, iw, 10.5, DIM, true, Align::Left);
+    ui.text("⌘R · esc", x, y, iw, 10.5, DIM, false, Align::Right);
+    y += ui.s(20.0);
+    let title = match v.branch {
+        Some(b) => format!("{} · ⎇ {b}", v.project),
+        None if v.target.is_empty() => v.project.to_string(),
+        None => format!("{} · {}", v.project, v.target),
+    };
+    let mut right = x + iw;
+    if v.branch.is_some() && !v.busy {
+        let (label, color) = if v.confirm_discard { ("¿Borrar? ⌫", RED) } else { ("Descartar ⌫", DIM) };
+        right = button(ui, label, right, y, ui.s(118.0), color, Hit::ReviewDiscard, hover) - ui.s(8.0);
+        let merge = if v.target.is_empty() {
+            "Fusionar ↵".to_string()
+        } else {
+            format!("Fusionar en {} ↵", v.target)
+        };
+        right = button(ui, &merge, right, y, ui.s(190.0), GREEN, Hit::ReviewMerge, hover) - ui.s(8.0);
+    }
+    ui.text(title, x, y, right - x - ui.s(8.0), 17.0, TEXT, true, Align::Left);
+    y += ui.s(28.0);
+    let (added, removed, nfiles) = match v.files {
+        Some(Ok(f)) => (f.iter().map(|f| f.added).sum::<usize>(), f.iter().map(|f| f.removed).sum(), f.len()),
+        _ => (0, 0, 0),
+    };
+    let what = match v.branch {
+        Some(_) => "desde que empezó el agente".to_string(),
+        None => "sin commit respecto a HEAD".to_string(),
+    };
+    let summary = match nfiles {
+        0 => String::new(),
+        1 => format!("1 archivo · {what}"),
+        n => format!("{n} archivos · {what}"),
+    };
+    ui.text(&summary, x, y, iw, 12.0, DIM, false, Align::Left);
+    if nfiles > 0 {
+        ui.text(format!("−{removed}"), x, y, iw, 12.0, RED, true, Align::Right);
+        ui.text(format!("+{added}"), x, y, iw - ui.s(44.0), 12.0, GREEN, true, Align::Right);
+    }
+    y += ui.s(26.0);
+    ui.fill(Area::new(bx.x, y, bx.w, 1.0), BORDER);
+
+    let footer_h = ui.s(40.0);
+    let body = Area::new(bx.x, y + 1.0, bx.w, bx.bottom() - footer_h - y - 1.0);
+    ui.fill(Area::new(bx.x, body.bottom(), bx.w, 1.0), BORDER);
+
+    // Pie: mensaje o ayuda.
+    let fy = body.bottom() + ui.s(12.0);
+    let (hint, hcolor) = if v.confirm_discard {
+        (
+            format!(
+                "⌫ otra vez para cerrar el agente y BORRAR su worktree y la rama {} (lo no fusionado se pierde) · esc cancelar",
+                v.branch.unwrap_or_default()
+            ),
+            RED,
+        )
+    } else if let Some((m, err)) = v.message {
+        (m.to_string(), if err { RED } else { GREEN })
+    } else if v.branch.is_some() {
+        ("↑↓ archivo · rueda, espacio o j/k desplazar · ↵ fusionar · ⌫ descartar · r recargar · esc cerrar".into(), DIM)
+    } else {
+        ("↑↓ archivo · rueda, espacio o j/k desplazar · r recargar · esc cerrar".into(), DIM)
+    };
+    ui.text(hint, x, fy, iw, 11.0, hcolor, false, Align::Left);
+
+    let files = match v.files {
+        None => {
+            ui.text("Cargando cambios…", x, body.y + ui.s(24.0), iw, 13.0, DIM, false, Align::Left);
+            return 0;
+        }
+        Some(Err(e)) => {
+            ui.text(e, x, body.y + ui.s(24.0), iw, 13.0, RED, false, Align::Left);
+            return 0;
+        }
+        Some(Ok([])) => {
+            let msg = match v.branch {
+                Some(_) => "El agente todavía no ha cambiado nada.",
+                None => "No hay cambios sin commit.",
+            };
+            ui.text(msg, x, body.y + ui.s(24.0), iw, 13.0, DIM, false, Align::Left);
+            return 0;
+        }
+        Some(Ok(f)) => f,
+    };
+
+    // Lista de archivos.
+    let list_w = ui.s(300.0).min(body.w * 0.35);
+    ui.fill(Area::new(body.x + list_w, body.y, 1.0, body.h), BORDER);
+    let row_h = ui.s(26.0);
+    let fit = ((body.h - ui.s(12.0)) / row_h).floor().max(1.0) as usize;
+    let first = (v.sel + 1).saturating_sub(fit);
+    let mut ry = body.y + ui.s(6.0);
+    for (i, f) in files.iter().enumerate().skip(first).take(fit) {
+        let row = Area::new(body.x + ui.s(6.0), ry, list_w - ui.s(12.0), row_h - ui.s(2.0));
+        if i == v.sel {
+            ui.fill(row, ACTIVE_BG);
+            ui.fill(Area::new(row.x, row.y + ui.s(5.0), ui.s(3.0), row.h - ui.s(10.0)), ACCENT);
+        } else if hover == Some(Hit::ReviewFile(i)) {
+            ui.fill(row, HOVER_BG);
+        }
+        let ty = row.y + ui.s(4.0);
+        mono(
+            ui,
+            f.status.to_string(),
+            row.x + ui.s(10.0),
+            ty,
+            ui.s(14.0),
+            12.0,
+            status_color(f.status),
+            Align::Left,
+        );
+        let name = f.path.rsplit('/').next().unwrap_or(&f.path);
+        let stats = format!("+{} −{}", f.added, f.removed);
+        let sw = ui.s(78.0);
+        ui.text(name, row.x + ui.s(28.0), ty, row.w - ui.s(28.0) - sw, 12.5, TEXT, i == v.sel, Align::Left);
+        ui.text(stats, row.right() - sw - ui.s(8.0), ty + ui.s(1.0), sw, 10.5, DIM, false, Align::Right);
+        ui.hit(row, Hit::ReviewFile(i));
+        ry += row_h;
+    }
+
+    // Diff del archivo elegido.
+    let Some(file) = files.get(v.sel) else { return 0 };
+    let dx = body.x + list_w + 1.0;
+    let dw = body.right() - dx;
+    let tx = dx + ui.s(14.0);
+    ui.text(&file.path, tx, body.y + ui.s(8.0), dw - ui.s(28.0), 12.5, TEXT, true, Align::Left);
+    let top = body.y + ui.s(34.0);
+    let line_h = ui.s(17.0);
+    let rows = ((body.bottom() - top - ui.s(6.0)) / line_h).floor().max(1.0) as usize;
+    let gutter = ui.s(40.0);
+    let mut ly = top;
+    for l in file.lines.iter().skip(v.scroll).take(rows) {
+        let band = Area::new(dx, ly, dw, line_h);
+        let (color, sign) = match l.kind {
+            LineKind::Added => {
+                ui.tint(band, GREEN, 0.05);
+                (TEXT, "+")
+            }
+            LineKind::Removed => {
+                ui.tint(band, RED, 0.07);
+                (TEXT, "−")
+            }
+            LineKind::Hunk => {
+                ui.fill(band, HOVER_BG);
+                ([0x61, 0xaf, 0xef], "")
+            }
+            LineKind::Note => (DIM, ""),
+            LineKind::Context => ([0xab, 0xb0, 0xb9], " "),
+        };
+        let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+        if matches!(l.kind, LineKind::Hunk | LineKind::Note) {
+            mono(ui, &l.text, tx, ly + ui.s(1.0), dw - ui.s(28.0), 11.0, color, Align::Left);
+        } else {
+            mono(ui, num(l.old), tx, ly + ui.s(1.0), gutter - ui.s(6.0), 11.0, DIM, Align::Right);
+            mono(ui, num(l.new), tx + gutter, ly + ui.s(1.0), gutter - ui.s(6.0), 11.0, DIM, Align::Right);
+            let sx = tx + 2.0 * gutter + ui.s(4.0);
+            let scolor = if l.kind == LineKind::Added { GREEN } else { RED };
+            mono(ui, sign, sx, ly + ui.s(1.0), ui.s(12.0), 11.5, scolor, Align::Left);
+            mono(
+                ui,
+                &l.text,
+                sx + ui.s(16.0),
+                ly + ui.s(1.0),
+                dx + dw - sx - ui.s(24.0),
+                11.5,
+                color,
+                Align::Left,
+            );
+        }
+        ly += line_h;
+    }
+    // Indicador de posición si no cabe entero.
+    let total = file.lines.len();
+    if total > rows {
+        let track = Area::new(body.right() - ui.s(6.0), top, ui.s(3.0), rows as f32 * line_h);
+        ui.fill(track, TRACK);
+        let th = (track.h * rows as f32 / total as f32).max(ui.s(20.0));
+        let ty = track.y + (track.h - th) * (v.scroll as f32 / (total - rows) as f32).min(1.0);
+        ui.fill(Area::new(track.x, ty, track.w, th), BAR_IDLE);
+    }
+    // Clic en el panel: no lo cierra.
+    ui.hit(bx, Hit::ReviewBox);
+    rows
 }
 
 /// Barra de búsqueda flotante en la esquina superior derecha de un panel.

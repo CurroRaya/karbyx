@@ -128,6 +128,7 @@ impl App {
                     "cwd": p.info.cwd.as_deref().map(tilde),
                     "assistant": ai.map(|a| a.name()),
                     "agent": agent,
+                    "worktree": p.worktree.as_ref().map(|w| json!({ "branch": w.branch, "path": tilde(&w.path) })),
                     "focused": focused == Some(id),
                     "is_you": id == from,
                 }));

@@ -14,8 +14,10 @@ mod mcp;
 mod panes;
 mod query;
 mod rects;
+mod review;
 mod ui;
 mod usage;
+mod worktree;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -172,6 +174,8 @@ enum UserEvent {
     Hook(agents::HookMsg),
     /// Consulta de un agente por MCP.
     Query(agents::QueryMsg),
+    /// Resultado de git para el panel de revisión.
+    Review(review::ReviewEvent),
 }
 
 /// `FORGE_SELFTEST=1`: teclea líneas largas (con salto de línea y scroll) en
@@ -208,6 +212,8 @@ struct Pane {
     agent: Option<AgentStatus>,
     /// Proyecto (raíz git o carpeta) del directorio actual.
     project: String,
+    /// Worktree propio del agente, si se lanzó con ⌘⇧A.
+    worktree: Option<worktree::Worktree>,
 }
 
 /// Nombre del proyecto de una carpeta: la raíz del repositorio git que la
@@ -215,6 +221,9 @@ struct Pane {
 fn project_of(cwd: Option<&std::path::Path>) -> String {
     let Some(cwd) = cwd else { return "sin proyecto".into() };
     let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+    // Un worktree (de un agente o no) cuenta como su repositorio principal.
+    let main = worktree::main_checkout(root);
+    let root = main.as_path();
     if std::env::var_os("HOME").is_some_and(|h| std::path::Path::new(&h) == root) {
         return "~".into();
     }
@@ -242,6 +251,17 @@ impl Pane {
             PaneKind::Shell => (name, detected),
         }
     }
+}
+
+/// Opciones extra al abrir un panel.
+#[derive(Default)]
+struct Spawn {
+    /// Pregunta inicial para el asistente (archivo).
+    prompt: Option<PathBuf>,
+    /// Worktree donde arranca (y que queda asociado al panel).
+    worktree: Option<worktree::Worktree>,
+    /// Aviso que se imprime antes de lanzar el asistente.
+    notice: Option<String>,
 }
 
 /// Una pestaña: un árbol de paneles y cuál tiene el foco.
@@ -332,6 +352,8 @@ struct App {
     inbox: Option<usize>,
     /// Panel de mando abierto (con el agente seleccionado, si hay).
     dashboard: Option<usize>,
+    /// Panel «Revisar cambios» abierto (⌘R).
+    review: Option<review::Review>,
     /// Hace falta repintar periódicamente (animaciones, tiempos, heurística).
     tick_needed: Arc<AtomicBool>,
 }
@@ -380,6 +402,7 @@ impl App {
             claude_settings: None,
             inbox: None,
             dashboard: None,
+            review: None,
             tick_needed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -487,11 +510,12 @@ impl App {
         }
     }
 
-    fn spawn_pane(&mut self, kind: PaneKind, area: Area) -> Option<PaneId> {
-        self.spawn_pane_with(kind, area, None)
+    fn spawn_pane_with(&mut self, kind: PaneKind, area: Area, prompt: Option<PathBuf>) -> Option<PaneId> {
+        self.spawn_pane_ext(kind, area, Spawn { prompt, ..Spawn::default() })
     }
 
-    fn spawn_pane_with(&mut self, kind: PaneKind, area: Area, prompt: Option<PathBuf>) -> Option<PaneId> {
+    fn spawn_pane_ext(&mut self, kind: PaneKind, area: Area, extra: Spawn) -> Option<PaneId> {
+        let Spawn { prompt, worktree, notice } = extra;
         let gfx = self.gfx.as_ref()?;
         let size = gfx.grid_size(area);
         // `FORGE_CAPTURE_AI`: pestaña de IA de prueba con una shell normal dentro
@@ -502,10 +526,13 @@ impl App {
             PaneKind::Ai(_) if dry => None,
             PaneKind::Ai(p) => {
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-                let cmd = match &prompt {
+                let mut cmd = match &prompt {
                     Some(file) => ai_command_with_prompt(p, file),
                     None => ai_command(p.command()),
                 };
+                if let Some(n) = &notice {
+                    cmd = format!("printf '\\033[33m%s\\033[0m\\n\\n' '{}'; {cmd}", n.replace('\'', "'\\''"));
+                }
                 Some((shell, vec!["-l".into(), "-i".into(), "-c".into(), cmd]))
             }
             PaneKind::Shell => None,
@@ -520,7 +547,7 @@ impl App {
             env.insert("FORGE_CLAUDE_MCP".to_string(), mcp.to_string_lossy().into_owned());
         }
         let opts = SessionOptions {
-            cwd: self.new_session_cwd(),
+            cwd: worktree.as_ref().map(|w| w.path.clone()).or_else(|| self.new_session_cwd()),
             command,
             env,
             scrollback: Some(self.config.terminal.scrollback),
@@ -532,7 +559,7 @@ impl App {
                 self.next_id += 1;
                 let info = session.process_info();
                 let project = project_of(info.cwd.as_deref());
-                self.panes.insert(id, Pane { session, kind, info, agent: None, project });
+                self.panes.insert(id, Pane { session, kind, info, agent: None, project, worktree });
                 Some(id)
             }
             Err(e) => {
@@ -543,13 +570,38 @@ impl App {
     }
 
     fn open_tab(&mut self, kind: PaneKind) -> bool {
+        self.open_tab_ext(kind, Spawn::default())
+    }
+
+    fn open_tab_ext(&mut self, kind: PaneKind, extra: Spawn) -> bool {
         let Some(layout) = self.layout() else { return false };
-        let Some(id) = self.spawn_pane(kind, layout.term) else { return false };
+        let Some(id) = self.spawn_pane_ext(kind, layout.term, extra) else { return false };
         self.close_search();
         self.tabs.push(Tab { root: Node::Leaf(id), focus: id });
         self.set_active(self.tabs.len() - 1);
         self.redraw();
         true
+    }
+
+    /// Agente nuevo en su propio worktree de git (⌘⇧A). Fuera de un
+    /// repositorio se abre normal, con un aviso.
+    fn open_agent_worktree(&mut self) {
+        let Some(p) = self.selected_provider() else { return };
+        let cwd = self.new_session_cwd();
+        let extra = match cwd.as_deref().map(worktree::create) {
+            Some(Ok(wt)) => Spawn {
+                notice: Some(format!(
+                    "⎇ {} · trabajas en {} (⌘R para revisar y fusionar)",
+                    wt.branch,
+                    tilde(&wt.path)
+                )),
+                worktree: Some(wt),
+                ..Spawn::default()
+            },
+            Some(Err(e)) => Spawn { notice: Some(format!("Sin worktree: {e}.")), ..Spawn::default() },
+            None => Spawn::default(),
+        };
+        self.open_tab_ext(PaneKind::Ai(p), extra);
     }
 
     fn split(&mut self, dir: SplitDir) {
@@ -642,14 +694,18 @@ impl App {
                     self.select_tab(i);
                 }
             }
+            Action::NewAgent => self.open_agent_worktree(),
             Action::Inbox => {
                 self.inbox = if self.inbox.is_some() { None } else { Some(0) };
                 self.dashboard = None;
+                self.review = None;
             }
             Action::Dashboard => {
                 self.dashboard = if self.dashboard.is_some() { None } else { Some(0) };
                 self.inbox = None;
+                self.review = None;
             }
+            Action::Review => self.toggle_review(),
             Action::NextTab if n > 0 => self.select_tab((self.active + 1) % n),
             Action::PrevTab if n > 0 => self.select_tab((self.active + n - 1) % n),
             Action::NextTab | Action::PrevTab => {}
@@ -808,6 +864,8 @@ impl App {
                     self.go_to_pane(pane);
                 }
             }
+            Hit::ReviewFile(_) | Hit::ReviewMerge | Hit::ReviewDiscard => self.review_click(hit, event_loop),
+            Hit::ReviewBox => {}
         }
         self.redraw();
     }
@@ -1025,6 +1083,16 @@ impl App {
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta) {
+        if self.review.is_some() {
+            let lines = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
+                MouseScrollDelta::PixelDelta(p) => {
+                    p.y / (17.0 * self.gfx.as_ref().map_or(1.0, |g| g.scale()) as f64)
+                }
+            };
+            self.review_wheel(lines);
+            return;
+        }
         let Some((id, area)) = self.pane_at(self.cursor.0, self.cursor.1) else { return };
         let Some(gfx) = &self.gfx else { return };
         let lines = match delta {
@@ -1209,7 +1277,8 @@ impl App {
                 self.notify_agent(id, Some(AgentState::Working));
             }
         }
-        self.tick_needed.store(any, Ordering::Relaxed);
+        // Con el panel de revisión abierto el diff se refresca solo.
+        self.tick_needed.store(any || self.review.is_some(), Ordering::Relaxed);
     }
 
     /// Orden de las pestañas en pantalla: agrupadas por proyecto.
@@ -1282,6 +1351,7 @@ impl App {
         }
         self.inbox = None;
         self.dashboard = None;
+        self.review = None;
         self.redraw();
     }
 
@@ -1376,7 +1446,7 @@ impl App {
                 let pane = agent_pane.unwrap_or(focus);
                 let (name, ai) = pane.title();
                 let n = t.root.leaves().len();
-                let (title, subtitle, state, unseen, elapsed) = match &pane.agent {
+                let (title, mut subtitle, state, unseen, elapsed) = match &pane.agent {
                     Some(a) => (
                         a.task.clone().unwrap_or(name),
                         a.detail.clone().unwrap_or_else(|| state_text(a.state).into()),
@@ -1392,6 +1462,9 @@ impl App {
                         (name, sub, None, false, None)
                     }
                 };
+                if let Some(w) = &pane.worktree {
+                    subtitle = format!("⎇ {} · {subtitle}", w.name());
+                }
                 Some(TabView {
                     index: i,
                     shortcut: (pos < 9).then_some(pos + 1),
@@ -1411,6 +1484,15 @@ impl App {
     fn render(&mut self, event_loop: &ActiveEventLoop) {
         let mut prof = Profiler::new();
         self.pump_sessions(event_loop);
+        self.tick_review();
+        // `FORGE_CAPTURE_REVIEW`: abre el panel de revisión antes de capturar.
+        if capture::target().is_some()
+            && self.review.is_none()
+            && std::env::var_os("FORGE_CAPTURE_REVIEW").is_some()
+            && self.started.elapsed() + Duration::from_millis(1500) > capture::delay()
+        {
+            self.toggle_review();
+        }
         prof.mark("pump");
         if self.occluded || self.tabs.is_empty() {
             return;
@@ -1558,6 +1640,24 @@ impl App {
             let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
             ui::draw_dashboard(&mut overlay, screen, &usage, items, *sel, tick, self.hover, Utc::now());
         }
+        if let Some(r) = &mut self.review {
+            let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
+            let view = ui::ReviewView {
+                project: &r.project,
+                branch: r.worktree.as_ref().map(|w| w.branch.as_str()),
+                target: &r.target,
+                files: r.files.as_ref().map(|f| f.as_ref().map(Vec::as_slice).map_err(String::as_str)),
+                sel: r.sel,
+                scroll: r.scroll,
+                confirm_discard: r.confirm_discard,
+                message: r.message.as_ref().map(|(m, e)| (m.as_str(), *e)),
+                busy: r.busy,
+            };
+            let rows = ui::draw_review(&mut overlay, screen, &view, self.hover);
+            if rows > 0 {
+                r.rows = rows;
+            }
+        }
         rects.extend(ui.rects.iter().copied());
         labels.append(&mut ui.labels);
         // Prioridad de clic: capa superpuesta, luego paneles laterales.
@@ -1694,7 +1794,10 @@ impl ApplicationHandler<UserEvent> for App {
             self.open_tab(PaneKind::Shell);
             self.set_active(0);
             self.split(SplitDir::Horizontal);
-            if std::env::var_os("FORGE_CAPTURE_AI").is_some() {
+            if std::env::var_os("FORGE_CAPTURE_WORKTREE").is_some() {
+                // Agente en un worktree, como con ⌘⇧A.
+                self.open_agent_worktree();
+            } else if std::env::var_os("FORGE_CAPTURE_AI").is_some() {
                 self.open_tab(PaneKind::Ai(Provider::Claude));
             }
         }
@@ -1738,6 +1841,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Config(c) => self.apply_config(*c),
             UserEvent::Hook(m) => self.on_hook(m),
             UserEvent::Query(q) => self.on_query(q),
+            UserEvent::Review(r) => self.on_review(r),
             UserEvent::Wake => {
                 self.wake_pending.store(false, Ordering::Release);
                 // Las sesiones se atienden aunque la ventana no se vea
@@ -1777,6 +1881,9 @@ impl ApplicationHandler<UserEvent> for App {
                 // Los atajos de la terminal tienen prioridad, también sobre la búsqueda.
                 if let Some(a) = self.bindings.lookup(&event, self.mods) {
                     self.handle_action(a, event_loop);
+                    return;
+                }
+                if self.review.is_some() && self.review_key(&event, event_loop) {
                     return;
                 }
                 if self.inbox.is_some() && self.inbox_key(&event) {
@@ -1823,6 +1930,19 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
+                if self.review.is_some() {
+                    match ui::hit_at(&self.hits, self.cursor.0, self.cursor.1) {
+                        Some(h @ (Hit::ReviewFile(_) | Hit::ReviewMerge | Hit::ReviewDiscard)) => {
+                            self.review_click(h, event_loop)
+                        }
+                        Some(Hit::ReviewBox) => {}
+                        _ => {
+                            self.review = None;
+                            self.redraw();
+                        }
+                    }
+                    return;
+                }
                 if self.inbox.is_some()
                     && !matches!(
                         ui::hit_at(&self.hits, self.cursor.0, self.cursor.1),
