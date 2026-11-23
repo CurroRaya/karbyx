@@ -759,6 +759,33 @@ impl Session {
         Some(id)
     }
 
+    /// Últimos `limit` comandos del historial (sin el prompt vacío actual),
+    /// del más antiguo al más reciente.
+    pub fn recent_blocks(&self, limit: usize) -> Vec<(u64, BlockInfo)> {
+        let ids: Vec<u64> = self.block_starts().into_iter().map(|(id, _)| id).collect();
+        let Ok(t) = self.blocks.lock() else { return Vec::new() };
+        let mut v: Vec<(u64, BlockInfo)> = ids
+            .into_iter()
+            .filter_map(|id| Some((id, t.get(id)?.clone())))
+            .filter(|(_, i)| i.command.as_deref().is_some_and(|c| !c.trim().is_empty()))
+            .collect();
+        let skip = v.len().saturating_sub(limit);
+        v.drain(..skip);
+        v
+    }
+
+    /// Las últimas `lines` líneas con texto (historial + pantalla).
+    pub fn tail_text(&self, lines: usize) -> String {
+        let term = self.term.lock();
+        let bottom = term.bottommost_line();
+        let start = Line((bottom.0 - (lines + term.screen_lines()) as i32).max(term.topmost_line().0));
+        let text =
+            term.bounds_to_string(Point::new(start, Column(0)), Point::new(bottom, term.last_column()));
+        drop(term);
+        let all: Vec<&str> = text.trim_end().lines().collect();
+        all[all.len().saturating_sub(lines)..].iter().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n")
+    }
+
     /// Comando y salida de un bloque.
     pub fn block_text(&self, id: u64) -> Option<BlockText> {
         let starts = self.block_starts();

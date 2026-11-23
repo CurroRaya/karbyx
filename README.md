@@ -168,6 +168,27 @@ Con **Claude Code** el estado es exacto: forge lo lanza con
 `claude` a mano en una terminal de forge). Tus ajustes de Claude no se tocan.
 Con otros agentes (Codex, Gemini...) se deduce de su actividad.
 
+### Los agentes ven tus terminales (MCP)
+
+forge es también un servidor [MCP](https://modelcontextprotocol.io): un
+agente que corre dentro de forge puede ver las otras terminales sin que
+copies nada. Pídele, por ejemplo, «mira el error de la otra terminal» o «¿por
+qué ha fallado lo último que ejecuté?». Herramientas, todas de **solo
+lectura** (un agente nunca escribe en tus terminales):
+
+| Herramienta | Qué hace |
+|---|---|
+| `list_terminals` | Terminales abiertas: pestaña, proyecto, carpeta y estado de cada agente |
+| `read_terminal` | Últimas líneas de una terminal, tal como las ves |
+| `list_commands` | Últimos comandos con su código de salida y duración |
+| `read_command` | Un comando con su salida completa (por defecto el último; `failed` = el último que falló) |
+
+Sin indicar terminal, usan la que tienes delante o la última que usaste.
+**Claude Code** lo trae configurado: forge lo lanza con `--mcp-config` y
+permite estas herramientas sin preguntar (compruébalo con `/mcp`). Para otros
+clientes MCP, añade un servidor stdio con el comando `forge-app mcp`; solo
+funciona dentro de una terminal de forge.
+
 ### Bloques de comandos (estilo Warp)
 
 Con zsh, forge activa sola una integración con la shell (no toca tu

@@ -10,7 +10,9 @@ mod config;
 mod gfx;
 mod input;
 mod keys;
+mod mcp;
 mod panes;
+mod query;
 mod rects;
 mod ui;
 mod usage;
@@ -53,7 +55,10 @@ fn ai_command(cmd: &str) -> String {
     )
 }
 
-/// Cómo invocar el asistente: Claude lleva los hooks de forge (estado real).
+/// Cómo invocar el asistente: Claude lleva los hooks de forge (estado real)
+/// y su servidor MCP (para ver las otras terminales). `--mcp-config` admite
+/// varios archivos, así que va antes de `--settings` para no tragarse la
+/// pregunta.
 /// `args` va tal cual al final (ya entrecomillado). Se usa un `if` explícito
 /// porque zsh no parte en palabras `${VAR:+--settings "$VAR"}` y Claude
 /// recibiría un único argumento "--settings /ruta".
@@ -61,7 +66,7 @@ fn launch(cmd: &str, args: &str) -> String {
     let args = if args.is_empty() { String::new() } else { format!(" {args}") };
     if cmd == "claude" {
         format!(
-            r#"if [ -n "$FORGE_CLAUDE_SETTINGS" ]; then claude --settings "$FORGE_CLAUDE_SETTINGS"{args}; else claude{args}; fi"#
+            r#"if [ -n "$FORGE_CLAUDE_SETTINGS" ]; then claude --mcp-config "$FORGE_CLAUDE_MCP" --settings "$FORGE_CLAUDE_SETTINGS"{args}; else claude{args}; fi"#
         )
     } else {
         format!("{cmd}{args}")
@@ -165,6 +170,8 @@ enum UserEvent {
     Config(Box<Config>),
     /// Un hook de Claude Code informa del estado de un panel.
     Hook(agents::HookMsg),
+    /// Consulta de un agente por MCP.
+    Query(agents::QueryMsg),
 }
 
 /// `FORGE_SELFTEST=1`: teclea líneas largas (con salto de línea y scroll) en
@@ -319,7 +326,8 @@ struct App {
     window_title: String,
     /// Socket por el que llegan los hooks y ajustes para `claude --settings`.
     agent_socket: Option<PathBuf>,
-    claude_settings: Option<PathBuf>,
+    /// Archivos para `claude`: ajustes con los hooks y configuración MCP.
+    claude_settings: Option<(PathBuf, PathBuf)>,
     /// Bandeja de agentes abierta (⌘J) y fila seleccionada.
     inbox: Option<usize>,
     /// Panel de mando abierto (con el agente seleccionado, si hay).
@@ -507,8 +515,9 @@ impl App {
         if let Some(sock) = &self.agent_socket {
             env.insert("FORGE_SOCKET".to_string(), sock.to_string_lossy().into_owned());
         }
-        if let Some(settings) = &self.claude_settings {
+        if let Some((settings, mcp)) = &self.claude_settings {
             env.insert("FORGE_CLAUDE_SETTINGS".to_string(), settings.to_string_lossy().into_owned());
+            env.insert("FORGE_CLAUDE_MCP".to_string(), mcp.to_string_lossy().into_owned());
         }
         let opts = SessionOptions {
             cwd: self.new_session_cwd(),
@@ -1655,7 +1664,10 @@ impl ApplicationHandler<UserEvent> for App {
         // Canal de hooks de Claude Code (antes de abrir sesiones: va en su entorno).
         let proxy = self.proxy.clone();
         self.agent_socket = agents::start_server(move |m| {
-            let _ = proxy.send_event(UserEvent::Hook(m));
+            let _ = proxy.send_event(match m {
+                agents::Incoming::Hook(h) => UserEvent::Hook(h),
+                agents::Incoming::Query(q) => UserEvent::Query(q),
+            });
         });
         if let Ok(exe) = std::env::current_exe() {
             self.claude_settings = agents::write_claude_settings(&exe);
@@ -1725,6 +1737,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Config(c) => self.apply_config(*c),
             UserEvent::Hook(m) => self.on_hook(m),
+            UserEvent::Query(q) => self.on_query(q),
             UserEvent::Wake => {
                 self.wake_pending.store(false, Ordering::Release);
                 // Las sesiones se atienden aunque la ventana no se vea
@@ -1863,6 +1876,11 @@ fn main() -> anyhow::Result<()> {
         agents::run_hook_client();
         return Ok(());
     }
+    // `forge-app mcp`: servidor MCP que arrancan los asistentes.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        mcp::run();
+        return Ok(());
+    }
     clean_inherited_env();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
@@ -1896,7 +1914,7 @@ mod tests {
         let path = std::path::Path::new("/tmp/it's here/p.txt");
         let c = ai_command_with_prompt(Provider::Claude, path);
         assert!(
-            c.contains(r#"claude --settings "$FORGE_CLAUDE_SETTINGS" "$(cat '/tmp/it'\''s here/p.txt')""#),
+            c.contains(r#"--settings "$FORGE_CLAUDE_SETTINGS" "$(cat '/tmp/it'\''s here/p.txt')""#),
             "{c}"
         );
         // Sin forge (variable vacía) el comando queda como `claude "<pregunta>"`.
@@ -1930,12 +1948,16 @@ mod tests {
                 let mut c = std::process::Command::new(shell);
                 c.arg("-c").arg(launch("claude", "\"hola mundo\"")).env("PATH", &path);
                 match settings {
-                    Some(v) => c.env("FORGE_CLAUDE_SETTINGS", v),
+                    Some(v) => c.env("FORGE_CLAUDE_SETTINGS", v).env("FORGE_CLAUDE_MCP", "/m c/mcp.json"),
                     None => c.env_remove("FORGE_CLAUDE_SETTINGS"),
                 };
                 String::from_utf8_lossy(&c.output().unwrap().stdout).into_owned()
             };
-            assert_eq!(run(Some("/x y/hooks.json")), "[--settings][/x y/hooks.json][hola mundo]", "{shell}");
+            assert_eq!(
+                run(Some("/x y/hooks.json")),
+                "[--mcp-config][/m c/mcp.json][--settings][/x y/hooks.json][hola mundo]",
+                "{shell}"
+            );
             assert_eq!(run(None), "[hola mundo]", "{shell}");
         }
         std::fs::remove_dir_all(dir).ok();

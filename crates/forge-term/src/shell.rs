@@ -46,9 +46,9 @@ if [[ -o interactive && -z "$__forge_hooks" ]]; then
   precmd_functions=(__forge_precmd_first $precmd_functions __forge_precmd_last)
   preexec_functions=($preexec_functions __forge_preexec)
   # Claude Code lanzado a mano dentro de forge: añade los hooks que informan
-  # a forge de su estado (trabajando, te espera, terminado).
+  # a forge de su estado y el servidor MCP para ver las otras terminales.
   if [[ -n "$FORGE_CLAUDE_SETTINGS" ]]; then
-    claude() { command claude --settings "$FORGE_CLAUDE_SETTINGS" "$@"; }
+    claude() { command claude --mcp-config "$FORGE_CLAUDE_MCP" --settings "$FORGE_CLAUDE_SETTINGS" "$@"; }
   fi
 fi
 "#;
