@@ -5,6 +5,7 @@
 //! paneles divididos y el consumo de los asistentes de IA en un panel derecho.
 
 mod agents;
+mod board;
 mod capture;
 mod config;
 mod gfx;
@@ -176,6 +177,8 @@ enum UserEvent {
     Query(agents::QueryMsg),
     /// Resultado de git para el panel de revisión.
     Review(review::ReviewEvent),
+    /// +/− de los worktrees para la mesa.
+    BoardStats(Vec<(PaneId, board::Stats)>),
 }
 
 /// `FORGE_SELFTEST=1`: teclea líneas largas (con salto de línea y scroll) en
@@ -212,22 +215,30 @@ struct Pane {
     agent: Option<AgentStatus>,
     /// Proyecto (raíz git o carpeta) del directorio actual.
     project: String,
-    /// Worktree propio del agente, si se lanzó con ⌘⇧A.
+    /// Worktree propio del agente, si se lanzó con ⌘⇧A o desde la mesa.
     worktree: Option<worktree::Worktree>,
+    /// Tarea con la que se lanzó desde la mesa (título hasta que el agente diga otro).
+    label: Option<String>,
 }
 
 /// Nombre del proyecto de una carpeta: la raíz del repositorio git que la
 /// contiene o, si no hay, la propia carpeta.
 fn project_of(cwd: Option<&std::path::Path>) -> String {
     let Some(cwd) = cwd else { return "sin proyecto".into() };
-    let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
-    // Un worktree (de un agente o no) cuenta como su repositorio principal.
-    let main = worktree::main_checkout(root);
+    let main = project_root(cwd);
     let root = main.as_path();
     if std::env::var_os("HOME").is_some_and(|h| std::path::Path::new(&h) == root) {
         return "~".into();
     }
     root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into())
+}
+
+/// Raíz del proyecto de una carpeta: la del repositorio git que la contiene
+/// (un worktree cuenta como su repositorio principal) o la propia carpeta.
+/// No lanza procesos.
+fn project_root(cwd: &std::path::Path) -> PathBuf {
+    let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+    worktree::main_checkout(root)
 }
 
 /// "ahora", "3 min", "2 h", "1 d".
@@ -262,6 +273,10 @@ struct Spawn {
     worktree: Option<worktree::Worktree>,
     /// Aviso que se imprime antes de lanzar el asistente.
     notice: Option<String>,
+    /// Carpeta donde arranca (si no hay worktree).
+    cwd: Option<PathBuf>,
+    /// Título inicial (la tarea).
+    label: Option<String>,
 }
 
 /// Una pestaña: un árbol de paneles y cuál tiene el foco.
@@ -354,6 +369,9 @@ struct App {
     dashboard: Option<usize>,
     /// Panel «Revisar cambios» abierto (⌘R).
     review: Option<review::Review>,
+    /// La mesa de agentes y si se está viendo (en vez de las terminales).
+    board: board::Board,
+    board_visible: bool,
     /// Hace falta repintar periódicamente (animaciones, tiempos, heurística).
     tick_needed: Arc<AtomicBool>,
 }
@@ -403,6 +421,8 @@ impl App {
             inbox: None,
             dashboard: None,
             review: None,
+            board: board::Board::default(),
+            board_visible: false,
             tick_needed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -515,7 +535,7 @@ impl App {
     }
 
     fn spawn_pane_ext(&mut self, kind: PaneKind, area: Area, extra: Spawn) -> Option<PaneId> {
-        let Spawn { prompt, worktree, notice } = extra;
+        let Spawn { prompt, worktree, notice, cwd, label } = extra;
         let gfx = self.gfx.as_ref()?;
         let size = gfx.grid_size(area);
         // `FORGE_CAPTURE_AI`: pestaña de IA de prueba con una shell normal dentro
@@ -547,7 +567,7 @@ impl App {
             env.insert("FORGE_CLAUDE_MCP".to_string(), mcp.to_string_lossy().into_owned());
         }
         let opts = SessionOptions {
-            cwd: worktree.as_ref().map(|w| w.path.clone()).or_else(|| self.new_session_cwd()),
+            cwd: worktree.as_ref().map(|w| w.path.clone()).or(cwd).or_else(|| self.new_session_cwd()),
             command,
             env,
             scrollback: Some(self.config.terminal.scrollback),
@@ -559,7 +579,7 @@ impl App {
                 self.next_id += 1;
                 let info = session.process_info();
                 let project = project_of(info.cwd.as_deref());
-                self.panes.insert(id, Pane { session, kind, info, agent: None, project, worktree });
+                self.panes.insert(id, Pane { session, kind, info, agent: None, project, worktree, label });
                 Some(id)
             }
             Err(e) => {
@@ -674,7 +694,31 @@ impl App {
 
     fn handle_action(&mut self, action: Action, event_loop: &ActiveEventLoop) {
         let n = self.tabs.len();
+        // Las acciones de terminales salen de la mesa.
+        if self.board_visible
+            && matches!(
+                action,
+                Action::NewTab
+                    | Action::NewAi
+                    | Action::NewAgent
+                    | Action::SelectTab(_)
+                    | Action::NextTab
+                    | Action::PrevTab
+                    | Action::SplitRight
+                    | Action::SplitDown
+                    | Action::Find
+            )
+        {
+            self.show_board(false);
+        }
+        if self.board_visible && action == Action::Paste {
+            if let Some(t) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) {
+                self.board_paste(&t);
+            }
+            return;
+        }
         match action {
+            Action::Board => self.show_board(!self.board_visible),
             Action::Quit => event_loop.exit(),
             Action::NewTab => {
                 self.open_tab(PaneKind::Shell);
@@ -866,6 +910,11 @@ impl App {
             }
             Hit::ReviewFile(_) | Hit::ReviewMerge | Hit::ReviewDiscard => self.review_click(hit, event_loop),
             Hit::ReviewBox => {}
+            Hit::BoardCard(_)
+            | Hit::BoardShell(_)
+            | Hit::BoardReview(_)
+            | Hit::BoardProject
+            | Hit::BoardLaunch => self.board_click(hit),
         }
         self.redraw();
     }
@@ -1083,6 +1132,9 @@ impl App {
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta) {
+        if self.board_visible && self.review.is_none() {
+            return;
+        }
         if self.review.is_some() {
             let lines = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
@@ -1278,7 +1330,7 @@ impl App {
             }
         }
         // Con el panel de revisión abierto el diff se refresca solo.
-        self.tick_needed.store(any || self.review.is_some(), Ordering::Relaxed);
+        self.tick_needed.store(any || self.review.is_some() || self.board_visible, Ordering::Relaxed);
     }
 
     /// Orden de las pestañas en pantalla: agrupadas por proyecto.
@@ -1352,6 +1404,7 @@ impl App {
         self.inbox = None;
         self.dashboard = None;
         self.review = None;
+        self.board_visible = false;
         self.redraw();
     }
 
@@ -1485,6 +1538,7 @@ impl App {
         let mut prof = Profiler::new();
         self.pump_sessions(event_loop);
         self.tick_review();
+        self.tick_board();
         // `FORGE_CAPTURE_REVIEW`: abre el panel de revisión antes de capturar.
         if capture::target().is_some()
             && self.review.is_none()
@@ -1520,6 +1574,7 @@ impl App {
             let sel = (!items.is_empty()).then(|| sel.min(items.len() - 1));
             (sel, items)
         });
+        let board_view = self.board_visible.then(|| self.board_view(&usage));
         let Some(gfx) = &mut self.gfx else { return };
         let scale = gfx.scale();
         let tab = &self.tabs[self.active];
@@ -1530,7 +1585,9 @@ impl App {
         // Geometría de los paneles de la pestaña activa.
         let gap = scale.round().max(1.0);
         let (mut pane_areas, mut dividers) = (Vec::new(), Vec::new());
-        tab.root.layout(layout.term, gap, &mut pane_areas, &mut dividers);
+        if board_view.is_none() {
+            tab.root.layout(layout.term, gap, &mut pane_areas, &mut dividers);
+        }
 
         let mut rects: Vec<Rect> = Vec::with_capacity(1024);
         let mut texts: Vec<PaneText> = Vec::new();
@@ -1593,8 +1650,13 @@ impl App {
             });
         }
 
-        // Título de la ventana: el del panel activo.
-        if let Some(v) = views.iter().find(|v| v.index == self.active) {
+        // Título de la ventana: el del panel activo (o la mesa).
+        if board_view.is_some() {
+            if self.window_title != "Mesa — forge" {
+                gfx.window.set_title("Mesa — forge");
+                self.window_title = "Mesa — forge".into();
+            }
+        } else if let Some(v) = views.iter().find(|v| v.index == self.active) {
             let title = if v.subtitle.is_empty() {
                 format!("{} — forge", v.title)
             } else {
@@ -1621,10 +1683,14 @@ impl App {
                 usage.views.get(self.usage_sel.min(usage.views.len().saturating_sub(1))).map(|v| v.provider)
             })
             .flatten();
-        if let Some(area) = layout.left {
+        let screen = Area::new(0.0, 0.0, gfx.config.width as f32, gfx.config.height as f32);
+        if let Some(v) = &board_view {
+            board::draw_board(&mut ui, screen, v, tick, self.hover);
+        }
+        if let Some(area) = layout.left.filter(|_| board_view.is_none()) {
             ui::draw_left(&mut ui, area, &views, ai, attention, tick, self.hover);
         }
-        if let Some(area) = layout.right {
+        if let Some(area) = layout.right.filter(|_| board_view.is_none()) {
             ui::draw_right(&mut ui, area, &usage, self.usage_sel, self.hover, Utc::now());
         }
         if let Some(s) = &self.search
@@ -1789,6 +1855,13 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
+        // Se abre en la mesa (salvo `start = "terminal"`); en modo captura,
+        // solo si se pide con `FORGE_CAPTURE_BOARD`.
+        self.board_visible = if capture::target().is_some() {
+            std::env::var_os("FORGE_CAPTURE_BOARD").is_some()
+        } else {
+            self.config.window.start != "terminal"
+        };
         if capture::target().is_some() {
             // En modo captura: una segunda pestaña y la primera dividida en dos.
             self.open_tab(PaneKind::Shell);
@@ -1800,6 +1873,19 @@ impl ApplicationHandler<UserEvent> for App {
             } else if std::env::var_os("FORGE_CAPTURE_AI").is_some() {
                 self.open_tab(PaneKind::Ai(Provider::Claude));
             }
+        }
+        // `FORGE_CAPTURE_LAUNCH="tarea"`: lanza esa tarea desde la mesa al arrancar.
+        if capture::target().is_some()
+            && let Ok(task) = std::env::var("FORGE_CAPTURE_LAUNCH")
+        {
+            self.board.input = task;
+            self.board_launch();
+        }
+        // `FORGE_CAPTURE_INPUT="texto"`: deja ese texto escrito en la barra de la mesa.
+        if capture::target().is_some()
+            && let Ok(text) = std::env::var("FORGE_CAPTURE_INPUT")
+        {
+            self.board.input = text;
         }
         self.usage = Some(usage::spawn(self.waker()));
         let proxy = self.proxy.clone();
@@ -1842,6 +1928,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Hook(m) => self.on_hook(m),
             UserEvent::Query(q) => self.on_query(q),
             UserEvent::Review(r) => self.on_review(r),
+            UserEvent::BoardStats(s) => self.on_board_stats(s),
             UserEvent::Wake => {
                 self.wake_pending.store(false, Ordering::Release);
                 // Las sesiones se atienden aunque la ventana no se vea
@@ -1884,6 +1971,9 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 if self.review.is_some() && self.review_key(&event, event_loop) {
+                    return;
+                }
+                if self.board_visible && self.board_key(&event) {
                     return;
                 }
                 if self.inbox.is_some() && self.inbox_key(&event) {

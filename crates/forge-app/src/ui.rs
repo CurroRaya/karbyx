@@ -24,13 +24,13 @@ pub const BORDER: Rgb = [0x2a, 0x2e, 0x37];
 pub const TEXT: Rgb = [0xd7, 0xda, 0xe0];
 pub const DIM: Rgb = [0x7f, 0x84, 0x8e];
 pub const ACCENT: Rgb = [0xc6, 0x78, 0xdd];
-const ACTIVE_BG: Rgb = [0x25, 0x29, 0x32];
-const HOVER_BG: Rgb = [0x1d, 0x20, 0x27];
+pub const ACTIVE_BG: Rgb = [0x25, 0x29, 0x32];
+pub const HOVER_BG: Rgb = [0x1d, 0x20, 0x27];
 const TRACK: Rgb = [0x2a, 0x2e, 0x37];
 const BAR_IDLE: Rgb = [0x4b, 0x52, 0x63];
-const GREEN: Rgb = [0x98, 0xc3, 0x79];
+pub const GREEN: Rgb = [0x98, 0xc3, 0x79];
 const YELLOW: Rgb = [0xe5, 0xc0, 0x7b];
-const RED: Rgb = [0xe0, 0x6c, 0x75];
+pub const RED: Rgb = [0xe0, 0x6c, 0x75];
 
 const LEFT_W: f32 = 232.0;
 const RIGHT_W: f32 = 284.0;
@@ -128,6 +128,13 @@ pub enum Hit {
     ReviewDiscard,
     /// El propio panel de revisión (un clic dentro no lo cierra).
     ReviewBox,
+    /// Mesa: tarjeta de un agente, terminal normal y botón de revisar (panel).
+    BoardCard(u64),
+    BoardShell(u64),
+    BoardReview(u64),
+    /// Mesa: selector de proyecto y botón de lanzar.
+    BoardProject,
+    BoardLaunch,
 }
 
 /// Color de cada asistente.
@@ -259,7 +266,7 @@ fn limit_color(p: f64) -> Rgb {
 
 // ---------- barra izquierda: sesiones ----------
 
-const ORANGE: Rgb = [0xe5, 0x9b, 0x52];
+pub const ORANGE: Rgb = [0xe5, 0x9b, 0x52];
 
 /// Icono y color del estado de un agente (`tick` anima el de trabajando).
 pub fn state_icon(state: Option<AgentState>, ai: Option<Provider>, tick: u64) -> (&'static str, Rgb) {

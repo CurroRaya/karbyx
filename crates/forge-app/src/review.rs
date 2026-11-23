@@ -43,6 +43,8 @@ pub(super) struct Review {
     pub busy: bool,
     pub loading: bool,
     pub refreshed: Instant,
+    /// Lo descartado, para apuntarlo en «Hecho hoy» cuando se borre.
+    pub discarded: Option<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -104,6 +106,7 @@ impl App {
             busy: false,
             loading: false,
             refreshed: Instant::now(),
+            discarded: None,
         });
         self.refresh_review();
     }
@@ -166,6 +169,11 @@ impl App {
                 {
                     w.base = head.clone();
                 }
+                if result.is_ok()
+                    && let Some(done) = self.done_entry(pane)
+                {
+                    self.log_done(done.0, done.1, true);
+                }
                 if let Some(r) = self.review.as_mut().filter(|r| r.pane == pane) {
                     r.busy = false;
                     match result {
@@ -186,13 +194,30 @@ impl App {
                 if let Some(r) = self.review.as_mut().filter(|r| r.pane == pane) {
                     r.busy = false;
                     match result {
-                        Ok(_) => self.review = None,
+                        Ok(_) => {
+                            if let Some((title, project)) = r.discarded.take() {
+                                self.log_done(title, project, false);
+                            }
+                            self.review = None;
+                        }
                         Err(e) => r.message = Some((e, true)),
                     }
                 }
             }
         }
         self.redraw();
+    }
+
+    /// Título y proyecto del trabajo del panel, para «Hecho hoy».
+    fn done_entry(&self, pane: PaneId) -> Option<(String, String)> {
+        let r = self.review.as_ref().filter(|r| r.pane == pane)?;
+        let wt = r.worktree.as_ref()?;
+        let title = self
+            .panes
+            .get(&pane)
+            .and_then(|p| p.agent.as_ref().and_then(|a| a.task.clone()).or_else(|| p.label.clone()))
+            .unwrap_or_else(|| wt.name().to_string());
+        Some((title, r.project.clone()))
     }
 
     fn review_merge(&mut self) {
@@ -234,6 +259,10 @@ impl App {
         r.busy = true;
         r.message = Some((format!("Borrando {}…", wt.name()), false));
         let pane = r.pane;
+        let done = self.done_entry(pane);
+        if let Some(r) = &mut self.review {
+            r.discarded = done;
+        }
         // Primero se cierra el agente, para que no siga escribiendo ahí. Si
         // era la última terminal, se abre otra para no cerrar forge.
         let in_worktree: Vec<PaneId> = self

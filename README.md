@@ -1,7 +1,11 @@
 # forge
 
-Terminal para macOS escrita en Rust que une lo mejor de iTerm2 y Warp, con el
-consumo de tus asistentes de IA (Claude Code, Codex CLI, Gemini CLI) integrado.
+El centro de mando para tus agentes de IA en macOS, escrito en Rust. Al
+abrirlo no ves un prompt: ves **la mesa**, con tus agentes (Claude Code,
+Codex CLI, Gemini CLI) ordenados por lo que necesitan de ti. Escribes una
+tarea, pulsas ↵, y un agente se pone a trabajar en su propia copia del
+proyecto; tú revisas y fusionas. Por debajo, una terminal GPU completa con lo
+mejor de iTerm2 y Warp.
 
 [![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
 
@@ -119,10 +123,29 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 
 ## Uso
 
+### La mesa (⌘E)
+
+Es la pantalla con la que abre forge.
+
+- **«¿Qué hay que hacer?»**: escribe la tarea y pulsa ↵. forge lanza un agente
+  (el asistente seleccionado, Claude por defecto) en un **worktree propio**
+  del proyecto elegido, con la tarea ya escrita. ⇥ cambia de proyecto (los de
+  tus terminales abiertas). Fuera de un repositorio git, el agente trabaja en
+  la carpeta, sin worktree.
+- **Columnas**: *Trabajando*, *Te necesita*, *Para revisar* y *Hecho hoy*.
+  Cada tarjeta muestra la tarea, el proyecto y la rama, lo que hace ahora,
+  las últimas líneas de su terminal, sus `+/−` y sus tokens.
+- Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
+  (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
+- **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan
+  a las terminales. Si prefieres abrir en la terminal:
+  `[window] start = "terminal"`.
+
 ### Atajos
 
 | Atajo | Acción |
 |---|---|
+| ⌘E | La mesa de agentes / volver a las terminales |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |
 | ⌘⌥←→↑↓ | Moverse entre paneles |
@@ -243,6 +266,7 @@ line_height = 1.3
 
 [window]
 padding = 10
+start = "mesa"             # "terminal": abrir en la terminal en vez de en la mesa
 
 [terminal]
 scrollback = 10000
@@ -302,6 +326,7 @@ FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app 
 FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
 FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
 FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
+FORGE_CAPTURE_BOARD=1 FORGE_CAPTURE_LAUNCH="tarea" FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # la mesa, lanzando una tarea
 FORGE_CAPTURE_WORKTREE=1 FORGE_CAPTURE_AI=1 FORGE_CAPTURE_REVIEW=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # agente en worktree y panel ⌘R
 echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
 FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques

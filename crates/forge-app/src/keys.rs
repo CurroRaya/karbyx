@@ -50,6 +50,8 @@ pub enum Action {
     NewAgent,
     /// Revisar los cambios (diff) del panel activo.
     Review,
+    /// Mesa de agentes / terminal.
+    Board,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -84,6 +86,7 @@ const NAMES: &[(&str, Action)] = &[
     ("dashboard", Action::Dashboard),
     ("new_agent", Action::NewAgent),
     ("review", Action::Review),
+    ("board", Action::Board),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -120,6 +123,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("dashboard", "cmd+u"),
     ("new_agent", "cmd+shift+a"),
     ("review", "cmd+r"),
+    ("board", "cmd+e"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -269,12 +273,13 @@ mod tests {
         let b = Bindings::new(&BTreeMap::new());
         assert_eq!(b.lookup_chord(&Chord::parse("cmd+d").unwrap()), Some(Action::SplitRight));
         assert_eq!(b.lookup_chord(&Chord::parse("cmd+3").unwrap()), Some(Action::SelectTab(2)));
+        assert_eq!(b.lookup_chord(&Chord::parse("cmd+e").unwrap()), Some(Action::Board));
 
         let mut o = BTreeMap::new();
-        o.insert("split_right".to_string(), "cmd+e".to_string());
+        o.insert("split_right".to_string(), "cmd+y".to_string());
         o.insert("find".to_string(), "none".to_string());
         let b = Bindings::new(&o);
-        assert_eq!(b.lookup_chord(&Chord::parse("cmd+e").unwrap()), Some(Action::SplitRight));
+        assert_eq!(b.lookup_chord(&Chord::parse("cmd+y").unwrap()), Some(Action::SplitRight));
         assert_eq!(b.lookup_chord(&Chord::parse("cmd+d").unwrap()), None);
         assert_eq!(b.lookup_chord(&Chord::parse("cmd+f").unwrap()), None);
     }

@@ -54,11 +54,13 @@ impl Default for FontConfig {
 #[serde(default)]
 pub struct WindowConfig {
     pub padding: f32,
+    /// Qué se ve al abrir forge: `"mesa"` (los agentes) o `"terminal"`.
+    pub start: String,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { padding: 10.0 }
+        Self { padding: 10.0, start: "mesa".into() }
     }
 }
 
