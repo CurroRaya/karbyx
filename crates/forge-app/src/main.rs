@@ -18,6 +18,7 @@ mod rects;
 mod review;
 mod ui;
 mod usage;
+mod verify;
 mod worktree;
 
 use std::collections::HashMap;
@@ -209,6 +210,10 @@ enum UserEvent {
     Review(review::ReviewEvent),
     /// +/− de los worktrees para la mesa.
     BoardStats(Vec<(PaneId, board::Stats)>),
+    /// Terminó la verificación de un agente (panel, generación, resultado).
+    Verify(PaneId, u64, verify::Report),
+    /// Bytes para un panel concreto (p. ej. el ↵ tras escribirle a un agente).
+    WritePane(PaneId, Vec<u8>),
 }
 
 /// `FORGE_SELFTEST=1`: teclea líneas largas (con salto de línea y scroll) en
@@ -945,6 +950,8 @@ impl App {
             | Hit::BoardShell(_)
             | Hit::BoardReview(_)
             | Hit::BoardAnswer(..)
+            | Hit::BoardVerify(_)
+            | Hit::BoardFix(_)
             | Hit::BoardProject
             | Hit::BoardLaunch => self.board_click(hit),
         }
@@ -1321,6 +1328,7 @@ impl App {
             a.session = Some(sid);
         }
         self.notify_agent(msg.pane, before);
+        self.after_agent_change(msg.pane, before);
         self.redraw();
     }
 
@@ -1354,6 +1362,7 @@ impl App {
             let before = p.agent.as_ref().map(|a| (a.state, a.since));
             let idle = p.session.idle_for();
             p.agent = Some(agents::heuristic(p.agent.take(), idle, visible));
+            self.after_agent_change(id, before.map(|b| b.0));
             // Solo avisar si trabajó un rato (no por un parpadeo de salida).
             if let Some((AgentState::Working, since)) = before
                 && since.elapsed() >= Duration::from_secs(5)
@@ -1962,6 +1971,12 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Query(q) => self.on_query(q),
             UserEvent::Review(r) => self.on_review(r),
             UserEvent::BoardStats(s) => self.on_board_stats(s),
+            UserEvent::Verify(pane, generation, r) => self.on_verify(pane, generation, r),
+            UserEvent::WritePane(pane, bytes) => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.session.write(bytes);
+                }
+            }
             UserEvent::Wake => {
                 self.wake_pending.store(false, Ordering::Release);
                 // Las sesiones se atienden aunque la ventana no se vea

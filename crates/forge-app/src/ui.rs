@@ -143,6 +143,9 @@ pub enum Hit {
     BoardReview(u64),
     /// Mesa: responder a la pregunta de un agente (panel, opción desde 0).
     BoardAnswer(u64, u8),
+    /// Mesa: verificar (otra vez) los cambios de un agente y devolverle el fallo.
+    BoardVerify(u64),
+    BoardFix(u64),
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
     BoardLaunch,

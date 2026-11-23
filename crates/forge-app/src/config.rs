@@ -22,6 +22,12 @@
 //! name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
 //! background = "#171412"     # cualquier color suelto sobrescribe el tema
 //!
+//! [verify]                 # al terminar un agente en su worktree
+//! auto = true                # ejecutar los tests solos
+//! timeout_secs = 600
+//! [verify.commands]          # por proyecto; si no, se detecta (cargo, npm, go...)
+//! forge = "cargo test --workspace"
+//!
 //! [keys]
 //! new_tab = "cmd+t"
 //! split_right = "cmd+d"
@@ -94,6 +100,34 @@ pub struct ThemeConfig {
     pub ansi: Option<Vec<String>>,
 }
 
+/// Verificación automática de lo que hacen los agentes.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VerifyConfig {
+    /// Ejecutarla sola cuando un agente termina en su worktree.
+    pub auto: bool,
+    pub timeout_secs: u64,
+    /// Nombre del proyecto → comando (`""` o `"off"`: no verificar).
+    pub commands: BTreeMap<String, String>,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self { auto: true, timeout_secs: 600, commands: BTreeMap::new() }
+    }
+}
+
+impl VerifyConfig {
+    /// `Some(None)`: detectar; `Some(Some(c))`: el configurado; `None`: desactivada.
+    pub fn command(&self, project: &str) -> Option<Option<String>> {
+        match self.commands.get(project).map(|c| c.trim()) {
+            None => Some(None),
+            Some("" | "off" | "false") => None,
+            Some(c) => Some(Some(c.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -101,6 +135,7 @@ pub struct Config {
     pub window: WindowConfig,
     pub terminal: TerminalConfig,
     pub theme: ThemeConfig,
+    pub verify: VerifyConfig,
     /// Acción → atajo (`"cmd+shift+d"`).
     pub keys: BTreeMap<String, String>,
 }
@@ -277,6 +312,9 @@ mod tests {
             background = "#000000"
             [keys]
             split_right = "cmd+e"
+            [verify.commands]
+            forge = "cargo test --workspace"
+            web = "off"
             "##,
         )
         .unwrap();
@@ -288,6 +326,10 @@ mod tests {
         assert_eq!(t.background, [0, 0, 0]);
         assert_eq!(t.foreground, [0xf8, 0xf8, 0xf2]); // de dracula
         assert_eq!(c.keys["split_right"], "cmd+e");
+        assert!(c.verify.auto && c.verify.timeout_secs == 600);
+        assert_eq!(c.verify.command("forge"), Some(Some("cargo test --workspace".into())));
+        assert_eq!(c.verify.command("web"), None);
+        assert_eq!(c.verify.command("otro"), Some(None));
     }
 
     #[test]

@@ -161,6 +161,16 @@ Es la pantalla con la que abre forge.
   (*Sí*, *Sí, siempre*, *No*). Un clic, o la tecla 1-3 con la tarjeta
   seleccionada, responde en su terminal. forge vuelve a leer la pantalla antes
   de enviar nada: si la pregunta ya no está, no responde.
+- **Verificación automática**: cuando un agente termina en su worktree, forge
+  ejecuta los tests en segundo plano, sin gastar tokens, y la tarjeta llega a
+  *Para revisar* con un sello: **✓ 36 tests en verde** o **✕ 2 tests fallan**
+  (o *No compila*). Con un fallo, **Que lo arregle** le pasa al mismo agente
+  la salida completa para que lo corrija; al terminar se verifica otra vez.
+  ↻ repite la verificación, y **Verificar** la lanza a mano (p. ej. con Codex
+  o Gemini, que no avisan de cuándo terminan). El comando se detecta solo
+  (`cargo test`, `npm`/`pnpm`/`yarn`/`bun test`, `go test`, `pytest`,
+  `make test`) o se configura por proyecto en `[verify]`. Se ejecuta con tu
+  shell y tu `PATH`, como en tus terminales.
 - Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
   (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
 - **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan
@@ -303,6 +313,12 @@ notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 [theme]
 name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
 # background = "#171412"   # cualquier color suelto sobrescribe el tema
+
+[verify]                   # tests al terminar un agente en su worktree
+auto = true                # false: solo con el botón «Verificar»
+timeout_secs = 600
+[verify.commands]          # por proyecto (nombre de la carpeta); "off" la desactiva
+forge = "cargo test --workspace"
 
 [keys]                     # redefine atajos; "none" desactiva
 split_right = "cmd+d"

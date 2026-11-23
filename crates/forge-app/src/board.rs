@@ -20,6 +20,7 @@ use crate::agents::AgentState;
 use crate::panes::PaneId;
 use crate::ui::{self, Align, Area, Hit, Rgb, Ui};
 use crate::usage::UsageState;
+use crate::verify::{self, Outcome, Verify};
 use crate::worktree;
 use forge_term::{CellView, Snapshot};
 
@@ -55,6 +56,19 @@ pub(super) struct Board {
     pub done: Vec<DoneItem>,
     /// Último aviso (p. ej. por qué no hubo worktree).
     pub notice: Option<(String, bool)>,
+    /// Verificación de cada agente (en curso o terminada).
+    pub verify: HashMap<PaneId, Verify>,
+    verify_gen: u64,
+}
+
+/// La verificación tal como se ve en la tarjeta.
+#[derive(Debug, Clone)]
+pub struct Badge {
+    /// `None` mientras se ejecuta.
+    pub outcome: Option<Outcome>,
+    pub cmd: Option<String>,
+    pub since: Instant,
+    pub took: Option<Duration>,
 }
 
 /// Una tarjeta de agente.
@@ -75,6 +89,10 @@ pub struct Card {
     pub choice: Option<Choice>,
     /// Miniatura en vivo de su terminal.
     pub thumb: Thumb,
+    /// Resultado de la verificación de sus cambios.
+    pub verify: Option<Badge>,
+    /// Se puede verificar a mano (tiene cambios y no está trabajando).
+    pub can_verify: bool,
 }
 
 /// Un tramo de una fila de la miniatura: `len` celdas desde `start`, del
@@ -384,6 +402,15 @@ impl App {
                     unseen: a.is_some_and(|a| a.unseen),
                     choice,
                     thumb: thumb(&p.session.snapshot(), 48),
+                    verify: self.board.verify.get(&id).map(|v| Badge {
+                        outcome: v.report.as_ref().map(|r| r.outcome.clone()),
+                        cmd: v.report.as_ref().and_then(|r| r.cmd.clone()),
+                        since: v.since,
+                        took: v.report.as_ref().map(|r| r.took),
+                    }),
+                    can_verify: p.worktree.is_some()
+                        && state.is_some_and(|s| s != AgentState::Working)
+                        && self.board.stats.get(&id).is_some_and(|s| s.2 > 0),
                 });
             }
         }
@@ -467,9 +494,117 @@ impl App {
     }
 
     pub(super) fn tick_board(&mut self) {
+        // Verificaciones de agentes que ya no están.
+        let panes = &self.panes;
+        self.board.verify.retain(|id, v| {
+            let keep = panes.get(id).is_some_and(|p| p.worktree.is_some());
+            if !keep {
+                v.stop();
+            }
+            keep
+        });
         if self.board_visible && self.board.stats_at.is_none_or(|t| t.elapsed() >= STATS_EVERY) {
             self.refresh_board_stats();
         }
+    }
+
+    /// Tras un cambio de estado de un agente: si vuelve a trabajar, su
+    /// verificación ya no vale; si termina en su worktree, se verifica.
+    pub(super) fn after_agent_change(&mut self, pane: PaneId, before: Option<AgentState>) {
+        let Some(p) = self.panes.get(&pane) else { return };
+        let Some(a) = &p.agent else { return };
+        match a.state {
+            AgentState::Working => {
+                if let Some(v) = self.board.verify.remove(&pane) {
+                    v.stop();
+                }
+            }
+            AgentState::Done
+                if before == Some(AgentState::Working)
+                    && a.from_hooks
+                    && p.worktree.is_some()
+                    && self.config.verify.auto =>
+            {
+                self.start_verify(pane);
+            }
+            _ => {}
+        }
+    }
+
+    /// Ejecuta en segundo plano los tests del worktree del agente.
+    pub(super) fn start_verify(&mut self, pane: PaneId) {
+        let Some(p) = self.panes.get(&pane) else { return };
+        let Some(wt) = p.worktree.clone() else { return };
+        if let Some(old) = self.board.verify.remove(&pane) {
+            old.stop();
+        }
+        let Some(configured) = self.config.verify.command(&p.project) else {
+            self.board.notice = Some((format!("La verificación está desactivada para {}", p.project), true));
+            return;
+        };
+        let Some(dir) = dirs::cache_dir().map(|d| d.join("forge").join("verify")) else { return };
+        self.board.verify_gen += 1;
+        let generation = self.board.verify_gen;
+        let log = dir.join(format!("{}-{generation}.log", wt.name().replace('/', "-")));
+        let v = Verify::running(generation);
+        let cancel = v.cancel.clone();
+        self.board.verify.insert(pane, v);
+        let timeout = Duration::from_secs(self.config.verify.timeout_secs.max(10));
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            if let Some(r) = verify::check(&wt.path, &wt.base, configured, timeout, log, &cancel) {
+                let _ = proxy.send_event(UserEvent::Verify(pane, generation, r));
+            }
+        });
+        self.redraw();
+    }
+
+    pub(super) fn on_verify(&mut self, pane: PaneId, generation: u64, r: verify::Report) {
+        let Some(v) = self.board.verify.get_mut(&pane).filter(|v| v.generation == generation) else { return };
+        if !self.focused
+            && let Some(p) = self.panes.get(&pane)
+        {
+            let title = p.agent.as_ref().and_then(|a| a.task.clone()).or_else(|| p.label.clone());
+            let what = title.map(|t| format!(" · {t}")).unwrap_or_default();
+            match &r.outcome {
+                Outcome::Passed(m) => super::notify("forge", &format!("✓ {m} en {}{what}", p.project)),
+                Outcome::Failed(m) => super::notify("forge", &format!("✕ {m} en {}{what}", p.project)),
+                Outcome::Skipped(_) => {}
+            }
+        }
+        v.report = Some(r);
+        self.redraw();
+    }
+
+    /// Le devuelve al agente el fallo de la verificación para que lo arregle.
+    pub(super) fn board_fix(&mut self, pane: PaneId) {
+        let name = self.agent_name(pane);
+        let Some(prompt) =
+            self.board.verify.get(&pane).and_then(|v| v.report.as_ref()).and_then(verify::fix_prompt)
+        else {
+            return;
+        };
+        let Some(p) = self.panes.get_mut(&pane) else { return };
+        if p.title().1.is_none() {
+            self.board.notice = Some((format!("{name} ya no está abierto en esa terminal"), true));
+            return;
+        }
+        if p.agent.as_ref().is_some_and(|a| a.state == AgentState::Working) {
+            self.board.notice = Some((format!("{name} está trabajando; espera a que termine"), true));
+            return;
+        }
+        p.session.write(prompt.into_bytes());
+        if let Some(a) = p.agent.as_mut() {
+            a.unseen = false;
+        }
+        // El ↵ aparte: si llega pegado al texto, el asistente lo toma por
+        // parte de un pegado y no lo envía.
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = proxy.send_event(UserEvent::WritePane(pane, b"\r".to_vec()));
+        });
+        self.board.notice = Some((format!("Le he pasado el fallo a {name}"), false));
     }
 
     /// Apunta algo terminado en «Hecho hoy».
@@ -611,6 +746,8 @@ impl App {
     pub(super) fn board_click(&mut self, hit: Hit) {
         match hit {
             Hit::BoardAnswer(p, i) => self.board_answer(p, i as usize),
+            Hit::BoardVerify(p) => self.start_verify(p),
+            Hit::BoardFix(p) => self.board_fix(p),
             Hit::BoardCard(p) | Hit::BoardShell(p) => self.go_to_pane(p),
             Hit::BoardReview(p) => {
                 self.go_to_pane(p);
@@ -1071,9 +1208,13 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
         let tv = Area::new(a.x + px, a.y + ui.s(116.0), iw, ui.s(56.0));
         draw_thumb(ui, tv, &c.thumb, tick);
     } else {
-        // Lo que hace ahora, su pantalla en miniatura y su última línea.
+        // Lo que hace ahora (o el sello de la verificación), su pantalla en
+        // miniatura y su última línea.
         let dcolor = if col == 1 { HOT } else { ui::TEXT };
-        ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), iw, 11.5, dcolor, false, Align::Left);
+        let tw = draw_verify(ui, Area::new(a.x + px, a.y + ui.s(44.0), iw, ui.s(24.0)), c, tick, hover);
+        if c.verify.is_none() {
+            ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), tw, 11.5, dcolor, false, Align::Left);
+        }
         let tv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(84.0));
         draw_thumb(ui, tv, &c.thumb, tick);
         if let Some(l) = c.preview.last() {
@@ -1113,6 +1254,12 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
     if let Some(t) = c.tokens {
         meta.push(format!("{} tok", ui::tok(t)));
     }
+    // Qué se verificó y cuánto tardó.
+    if let Some(b) = &c.verify
+        && let (Some(cmd), Some(took)) = (&b.cmd, b.took)
+    {
+        meta.push(format!("{cmd} {} s", took.as_secs()));
+    }
     ui.text(meta.join(" · "), fx, fy, a.right() - fx - px, 11.0, ui::DIM, false, Align::Left);
     if c.branch.is_some() && c.stats.is_some_and(|s| s.2 > 0) && col != 0 {
         let b = Area::new(a.right() - ui.s(12.0) - ui.s(88.0), fy - ui.s(5.0), ui.s(88.0), ui.s(24.0));
@@ -1127,6 +1274,68 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
         ui.round(d, HOT, 1.0, 4.0);
     }
     ui.hit(a, Hit::BoardCard(c.pane));
+}
+
+/// Botón pequeño de la tarjeta. Devuelve su ancho.
+fn small_button(
+    ui: &mut Ui,
+    right: f32,
+    y: f32,
+    label: &str,
+    color: Rgb,
+    hit: Hit,
+    hover: Option<Hit>,
+) -> f32 {
+    let w = ui.s(20.0) + label.chars().count() as f32 * ui.s(6.6);
+    let b = Area::new(right - w, y, w, ui.s(24.0));
+    let h = hover == Some(hit);
+    if h {
+        ui.glow(b, color, 0.18, 7.0, 7.0);
+    }
+    ui.round(b, color, if h { 0.3 } else { 0.14 }, 7.0);
+    ui.text(label, b.x, b.y + ui.s(5.0), b.w, 11.0, color, true, Align::Center);
+    ui.hit(b, hit);
+    w
+}
+
+/// Sello de la verificación y sus botones, en la línea de detalle. Devuelve
+/// el ancho que queda libre a la izquierda para el texto del detalle.
+fn draw_verify(ui: &mut Ui, a: Area, c: &Card, tick: u64, hover: Option<Hit>) -> f32 {
+    let gap = ui.s(6.0);
+    let Some(b) = &c.verify else {
+        if !c.can_verify {
+            return a.w;
+        }
+        let w = small_button(ui, a.right(), a.y, "Verificar", STEEL, Hit::BoardVerify(c.pane), hover);
+        return a.w - w - gap;
+    };
+    let mut right = a.right();
+    let ty = a.y + ui.s(6.0);
+    let (icon, text, color) = match &b.outcome {
+        None => {
+            const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
+            let secs = b.since.elapsed().as_secs();
+            (SPIN[(tick % 4) as usize], format!("Verificando… {secs} s"), EMBER)
+        }
+        Some(Outcome::Passed(m)) => ("✓", m.clone(), ui::GREEN),
+        Some(Outcome::Failed(m)) => ("✕", m.clone(), ui::RED),
+        Some(Outcome::Skipped(m)) => ("–", m.clone(), ui::DIM),
+    };
+    if b.outcome.is_some() {
+        right -= small_button(ui, right, a.y, "↻", STEEL, Hit::BoardVerify(c.pane), hover) + gap;
+    }
+    if matches!(b.outcome, Some(Outcome::Failed(_))) {
+        right -= small_button(ui, right, a.y, "Que lo arregle", EMBER, Hit::BoardFix(c.pane), hover) + gap;
+    }
+    // Sello: una píldora tintada con el icono y el resultado.
+    let label = text;
+    let room = right - a.x;
+    let pill_w = (ui.s(32.0) + label.chars().count() as f32 * ui.s(7.0)).min(room);
+    let pill = Area::new(a.x, a.y, pill_w, ui.s(24.0));
+    ui.round(pill, color, 0.12, 7.0);
+    ui.text(icon, pill.x + ui.s(8.0), ty, ui.s(14.0), 11.5, color, true, Align::Left);
+    ui.text(label, pill.x + ui.s(24.0), ty, pill.w - ui.s(30.0), 11.0, color, true, Align::Left);
+    0.0
 }
 
 #[cfg(test)]

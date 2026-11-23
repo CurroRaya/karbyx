@@ -844,6 +844,7 @@ dependencies = [
  "forge-ai",
  "forge-term",
  "glyphon",
+ "libc",
  "log",
  "png",
  "pollster",
