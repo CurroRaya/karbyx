@@ -19,8 +19,8 @@
 //! notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 //!
 //! [theme]
-//! name = "one-dark"          # one-dark | dracula | solarized-dark | gruvbox | light
-//! background = "#1a1d23"     # cualquier color suelto sobrescribe el tema
+//! name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
+//! background = "#171412"     # cualquier color suelto sobrescribe el tema
 //!
 //! [keys]
 //! new_tab = "cmd+t"
@@ -131,7 +131,8 @@ fn hex_list(list: [&str; 16]) -> [Rgb8; 16] {
 pub fn builtin_theme(name: &str) -> Option<Theme> {
     let base = Theme::default();
     let t = match name.to_ascii_lowercase().as_str() {
-        "one-dark" | "onedark" | "default" => base,
+        "forja" | "forge" | "default" => base,
+        "one-dark" | "onedark" => Theme::one_dark(),
         "dracula" => Theme {
             ansi: hex_list([
                 "#21222c", "#ff5555", "#50fa7b", "#f1fa8c", "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
@@ -295,7 +296,7 @@ mod tests {
         assert_eq!(c, Config::default());
         let c = Config::parse("[theme]\nname = \"no-existe\"").unwrap();
         assert_eq!(c.theme().background, Theme::default().background);
-        for n in ["one-dark", "dracula", "solarized-dark", "gruvbox", "light"] {
+        for n in ["forja", "one-dark", "dracula", "solarized-dark", "gruvbox", "light"] {
             assert!(builtin_theme(n).is_some(), "{n}");
         }
     }

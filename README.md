@@ -7,6 +7,11 @@ tarea, pulsas ↵, y un agente se pone a trabajar en su propia copia del
 proyecto; tú revisas y fusionas. Por debajo, una terminal GPU completa con lo
 mejor de iTerm2 y Warp.
 
+Su aspecto es el de una forja: carbón cálido, acentos de brasa y una mesa donde
+cada agente tiene temperatura. Los que trabajan laten como brasas, el que te
+espera está al rojo y lo terminado se enfría a acero. El tema de la terminal,
+«forja», va a juego; el anterior sigue disponible como `one-dark`.
+
 [![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
 
 forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
@@ -275,8 +280,8 @@ shell_integration = true   # bloques de comandos (zsh)
 notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 
 [theme]
-name = "one-dark"          # one-dark | dracula | solarized-dark | gruvbox | light
-# background = "#1a1d23"   # cualquier color suelto sobrescribe el tema
+name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
+# background = "#171412"   # cualquier color suelto sobrescribe el tema
 
 [keys]                     # redefine atajos; "none" desactiva
 split_right = "cmd+d"

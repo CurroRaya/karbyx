@@ -569,6 +569,7 @@ pub fn terminal_rects(
                     pos: [ox + start as f32 * m.cell_w, y],
                     size: [(c - start) as f32 * m.cell_w, m.cell_h],
                     color: linear(bg, 1.0),
+                    ..Default::default()
                 });
             }
         }
@@ -579,6 +580,7 @@ pub fn terminal_rects(
                     pos: [x, y + m.cell_h - 2.0 * thick],
                     size: [m.cell_w, thick],
                     color: linear(cell.fg, 1.0),
+                    ..Default::default()
                 });
             }
             if cell.strikeout {
@@ -586,6 +588,7 @@ pub fn terminal_rects(
                     pos: [x, y + m.cell_h * 0.55],
                     size: [m.cell_w, thick],
                     color: linear(cell.fg, 1.0),
+                    ..Default::default()
                 });
             }
         }
@@ -596,10 +599,20 @@ pub fn terminal_rects(
         let y = oy + cur.row as f32 * m.cell_h;
         let col = linear(theme.cursor, 1.0);
         rects.extend([
-            Rect { pos: [x, y], size: [m.cell_w, thick], color: col },
-            Rect { pos: [x, y + m.cell_h - thick], size: [m.cell_w, thick], color: col },
-            Rect { pos: [x, y], size: [thick, m.cell_h], color: col },
-            Rect { pos: [x + m.cell_w - thick, y], size: [thick, m.cell_h], color: col },
+            Rect { pos: [x, y], size: [m.cell_w, thick], color: col, ..Default::default() },
+            Rect {
+                pos: [x, y + m.cell_h - thick],
+                size: [m.cell_w, thick],
+                color: col,
+                ..Default::default()
+            },
+            Rect { pos: [x, y], size: [thick, m.cell_h], color: col, ..Default::default() },
+            Rect {
+                pos: [x + m.cell_w - thick, y],
+                size: [thick, m.cell_h],
+                color: col,
+                ..Default::default()
+            },
         ]);
     }
     rects

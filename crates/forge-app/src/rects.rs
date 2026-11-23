@@ -14,10 +14,16 @@ struct Inst {
     @location(0) pos: vec2<f32>,
     @location(1) size: vec2<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) color2: vec4<f32>,
+    @location(4) shape: vec4<f32>,
 };
 struct Out {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
+    @location(1) color2: vec4<f32>,
+    @location(2) local: vec2<f32>,
+    @location(3) size: vec2<f32>,
+    @location(4) shape: vec4<f32>,
 };
 
 @vertex
@@ -28,22 +34,57 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> Out {
     var o: Out;
     o.pos = vec4<f32>(ndc, 0.0, 1.0);
     o.color = inst.color;
+    o.color2 = inst.color2;
+    o.local = corner * inst.size;
+    o.size = inst.size;
+    o.shape = inst.shape;
     return o;
+}
+
+// Distancia con signo a una caja de esquinas redondeadas centrada en 0.
+fn sd_round_box(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - half + vec2<f32>(r, r);
+    return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 @fragment
 fn fs(i: Out) -> @location(0) vec4<f32> {
-    return i.color;
+    // shape = (radio, resplandor, degradado vertical, -)
+    var c = i.color;
+    if i.shape.z > 0.5 {
+        c = mix(i.color, i.color2, clamp(i.local.y / max(i.size.y, 1.0), 0.0, 1.0));
+    }
+    let radius = i.shape.x;
+    let glow = i.shape.y;
+    if radius <= 0.0 && glow <= 0.0 {
+        return c;
+    }
+    let half = i.size * 0.5 - vec2<f32>(glow, glow);
+    let r = min(radius, min(half.x, half.y));
+    let d = sd_round_box(i.local - i.size * 0.5, half, r);
+    var a: f32;
+    if glow > 0.0 {
+        let t = clamp(1.0 - d / glow, 0.0, 1.0);
+        a = t * t;
+    } else {
+        a = clamp(0.5 - d, 0.0, 1.0);
+    }
+    return vec4<f32>(c.rgb, c.a * a);
 }
 "#;
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Default, Pod, Zeroable)]
 pub struct Rect {
     pub pos: [f32; 2],
     pub size: [f32; 2],
     /// Color lineal (no sRGB), con alfa.
     pub color: [f32; 4],
+    /// Color del borde inferior si hay degradado (`shape[2] = 1`).
+    pub color2: [f32; 4],
+    /// Radio de las esquinas, ancho del resplandor (difuminado hacia fuera,
+    /// dentro de `size`) y degradado vertical. Todo a 0: rectángulo sólido.
+    pub shape: [f32; 4],
 }
 
 /// Convierte sRGB 8 bits a lineal, porque la superficie es sRGB.
@@ -99,7 +140,7 @@ impl RectRenderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+        let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("rects"),
             layout: Some(&pl),

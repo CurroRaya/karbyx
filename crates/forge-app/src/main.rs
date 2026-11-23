@@ -898,6 +898,7 @@ impl App {
             Hit::Provider(i) => self.usage_sel = i,
             Hit::AskAi(pane, block) => self.ask_ai(pane, block),
             Hit::OpenInbox => self.inbox = Some(0),
+            Hit::OpenBoard => self.show_board(true),
             Hit::InboxItem(i) => {
                 if let Some((pane, _)) = self.inbox_items().into_iter().nth(i) {
                     self.go_to_pane(pane);
@@ -1647,6 +1648,7 @@ impl App {
                 pos: [d.line.x, d.line.y],
                 size: [d.line.w, d.line.h],
                 color: linear(ui::BORDER, 1.0),
+                ..Default::default()
             });
         }
 

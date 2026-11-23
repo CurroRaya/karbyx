@@ -19,18 +19,25 @@ use crate::worktree::{FileDiff, LineKind};
 
 pub type Rgb = [u8; 3];
 
-pub const PANEL_BG: Rgb = [0x14, 0x16, 0x1b];
-pub const BORDER: Rgb = [0x2a, 0x2e, 0x37];
-pub const TEXT: Rgb = [0xd7, 0xda, 0xe0];
-pub const DIM: Rgb = [0x7f, 0x84, 0x8e];
-pub const ACCENT: Rgb = [0xc6, 0x78, 0xdd];
-pub const ACTIVE_BG: Rgb = [0x25, 0x29, 0x32];
-pub const HOVER_BG: Rgb = [0x1d, 0x20, 0x27];
-const TRACK: Rgb = [0x2a, 0x2e, 0x37];
-const BAR_IDLE: Rgb = [0x4b, 0x52, 0x63];
-pub const GREEN: Rgb = [0x98, 0xc3, 0x79];
-const YELLOW: Rgb = [0xe5, 0xc0, 0x7b];
-pub const RED: Rgb = [0xe0, 0x6c, 0x75];
+// Paleta «forja»: carbón cálido, brasa y hueso.
+pub const PANEL_BG: Rgb = [0x15, 0x13, 0x11];
+pub const BORDER: Rgb = [0x30, 0x2a, 0x25];
+pub const TEXT: Rgb = [0xec, 0xe4, 0xda];
+pub const DIM: Rgb = [0x94, 0x89, 0x7e];
+/// Brasa: el color de la marca.
+pub const EMBER: Rgb = [0xf0, 0x8a, 0x4b];
+pub const ACCENT: Rgb = EMBER;
+/// Metal al rojo blanco: lo que necesita tu atención.
+pub const HOT: Rgb = [0xff, 0xc4, 0x5a];
+/// Acero frío: lo terminado.
+pub const STEEL: Rgb = [0x8d, 0x9c, 0xab];
+pub const ACTIVE_BG: Rgb = [0x2c, 0x24, 0x1e];
+pub const HOVER_BG: Rgb = [0x21, 0x1d, 0x19];
+const TRACK: Rgb = [0x30, 0x2a, 0x25];
+const BAR_IDLE: Rgb = [0x57, 0x4d, 0x44];
+pub const GREEN: Rgb = [0x9e, 0xc4, 0x7a];
+const YELLOW: Rgb = [0xe9, 0xc0, 0x6e];
+pub const RED: Rgb = [0xe8, 0x6a, 0x5c];
 
 const LEFT_W: f32 = 232.0;
 const RIGHT_W: f32 = 284.0;
@@ -118,6 +125,8 @@ pub enum Hit {
     AskAi(u64, u64),
     /// Abrir la bandeja de agentes.
     OpenInbox,
+    /// Volver a la mesa.
+    OpenBoard,
     /// Fila de la bandeja de agentes.
     InboxItem(usize),
     /// Fila de agente en el panel de mando.
@@ -165,11 +174,76 @@ impl Ui {
 
     /// Rectángulo semitransparente.
     pub fn tint(&mut self, a: Area, color: Rgb, alpha: f32) {
-        self.rects.push(Rect { pos: [a.x, a.y], size: [a.w, a.h], color: linear(color, alpha) });
+        self.rects.push(Rect {
+            pos: [a.x, a.y],
+            size: [a.w, a.h],
+            color: linear(color, alpha),
+            ..Default::default()
+        });
     }
 
     pub fn fill(&mut self, a: Area, color: Rgb) {
-        self.rects.push(Rect { pos: [a.x, a.y], size: [a.w, a.h], color: linear(color, 1.0) });
+        self.rects.push(Rect {
+            pos: [a.x, a.y],
+            size: [a.w, a.h],
+            color: linear(color, 1.0),
+            ..Default::default()
+        });
+    }
+
+    /// Rectángulo de esquinas redondeadas.
+    pub fn round(&mut self, a: Area, color: Rgb, alpha: f32, radius: f32) {
+        let shape = [self.s(radius), 0.0, 0.0, 0.0];
+        self.rects.push(Rect {
+            pos: [a.x, a.y],
+            size: [a.w, a.h],
+            color: linear(color, alpha),
+            shape,
+            ..Default::default()
+        });
+    }
+
+    /// Degradado vertical de `top` a `bottom`, con esquinas redondeadas.
+    pub fn gradient(&mut self, a: Area, top: (Rgb, f32), bottom: (Rgb, f32), radius: f32) {
+        self.rects.push(Rect {
+            pos: [a.x, a.y],
+            size: [a.w, a.h],
+            color: linear(top.0, top.1),
+            color2: linear(bottom.0, bottom.1),
+            shape: [self.s(radius), 0.0, 1.0, 0.0],
+        });
+    }
+
+    /// Resplandor difuso alrededor de `a` (se pinta antes que la caja).
+    pub fn glow(&mut self, a: Area, color: Rgb, alpha: f32, radius: f32, spread: f32) {
+        let g = self.s(spread);
+        self.rects.push(Rect {
+            pos: [a.x - g, a.y - g],
+            size: [a.w + 2.0 * g, a.h + 2.0 * g],
+            color: linear(color, alpha),
+            shape: [self.s(radius) + g, g, 0.0, 0.0],
+            ..Default::default()
+        });
+    }
+
+    /// Caja redondeada con borde de 1 px (o `bw`).
+    pub fn panel(&mut self, a: Area, bg: Rgb, border: Rgb, radius: f32, bw: f32) {
+        let r = self.s(radius);
+        let shape = [r, 0.0, 0.0, 0.0];
+        self.rects.push(Rect {
+            pos: [a.x - bw, a.y - bw],
+            size: [a.w + 2.0 * bw, a.h + 2.0 * bw],
+            color: linear(border, 1.0),
+            shape: [r + bw, 0.0, 0.0, 0.0],
+            ..Default::default()
+        });
+        self.rects.push(Rect {
+            pos: [a.x, a.y],
+            size: [a.w, a.h],
+            color: linear(bg, 1.0),
+            shape,
+            ..Default::default()
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -266,13 +340,13 @@ fn limit_color(p: f64) -> Rgb {
 
 // ---------- barra izquierda: sesiones ----------
 
-pub const ORANGE: Rgb = [0xe5, 0x9b, 0x52];
+pub const ORANGE: Rgb = HOT;
 
 /// Icono y color del estado de un agente (`tick` anima el de trabajando).
 pub fn state_icon(state: Option<AgentState>, ai: Option<Provider>, tick: u64) -> (&'static str, Rgb) {
     const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
     match (state, ai) {
-        (Some(AgentState::Working), _) => (SPIN[(tick % 4) as usize], YELLOW),
+        (Some(AgentState::Working), _) => (SPIN[(tick % 4) as usize], EMBER),
         (Some(AgentState::Waiting), _) => ("●", ORANGE),
         (Some(AgentState::Done), _) => ("✓", GREEN),
         (None, Some(p)) => ("◆", accent(p)),
@@ -311,7 +385,30 @@ pub fn draw_left(
     ui.fill(Area::new(area.right() - 1.0, area.y, 1.0, area.h), BORDER);
 
     let pad = ui.s(16.0);
-    let mut y = area.y + ui.s(16.0);
+    let mut y = area.y + ui.s(14.0);
+    ui.gradient(Area::new(area.x, area.y, area.w - 1.0, ui.s(120.0)), (EMBER, 0.04), (EMBER, 0.0), 0.0);
+
+    // Marca y acceso a la mesa.
+    let logo = Area::new(area.x + pad, y + ui.s(2.0), ui.s(20.0), ui.s(20.0));
+    ui.glow(logo, EMBER, 0.3, 5.0, 8.0);
+    ui.gradient(logo, (HOT, 1.0), ([0xd2, 0x5f, 0x2c], 1.0), 5.0);
+    ui.text("f", logo.x, logo.y + ui.s(1.0), logo.w, 12.0, [0x1c, 0x12, 0x0b], true, Align::Center);
+    ui.text("forge", logo.right() + ui.s(8.0), y + ui.s(2.0), ui.s(70.0), 14.0, TEXT, true, Align::Left);
+    let mesa = Area::new(area.right() - pad - ui.s(84.0), y, ui.s(84.0), ui.s(24.0));
+    let mh = hover == Some(Hit::OpenBoard);
+    ui.panel(mesa, if mh { ACTIVE_BG } else { HOVER_BG }, BORDER, 7.0, 1.0);
+    ui.text(
+        "Mesa ⌘E",
+        mesa.x,
+        mesa.y + ui.s(4.0),
+        mesa.w,
+        11.0,
+        if mh { EMBER } else { TEXT },
+        true,
+        Align::Center,
+    );
+    ui.hit(mesa, Hit::OpenBoard);
+    y += ui.s(44.0);
     ui.text("SESIONES", area.x + pad, y, area.w - 2.0 * pad, 10.5, DIM, true, Align::Left);
 
     // Aviso de agentes que esperan (abre la bandeja de atención).
@@ -320,7 +417,7 @@ pub fn draw_left(
             if attention == 1 { "1 te espera".to_string() } else { format!("{attention} te esperan") };
         let w = ui.s(96.0);
         let chip = Area::new(area.right() - pad - ui.s(34.0) - w, y - ui.s(4.0), w, ui.s(22.0));
-        ui.fill(chip, if hover == Some(Hit::OpenInbox) { [0x3a, 0x2c, 0x1f] } else { [0x2e, 0x25, 0x1c] });
+        ui.round(chip, HOT, if hover == Some(Hit::OpenInbox) { 0.24 } else { 0.14 }, 11.0);
         ui.text(format!("● {label}"), chip.x, chip.y + ui.s(4.0), chip.w, 10.5, ORANGE, true, Align::Center);
         ui.hit(chip, Hit::OpenInbox);
     }
@@ -329,7 +426,7 @@ pub fn draw_left(
     let b = ui.s(24.0);
     let plus = Area::new(area.right() - pad - b + ui.s(4.0), y - ui.s(4.0), b, b);
     if hover == Some(Hit::NewTab) {
-        ui.fill(plus, ACTIVE_BG);
+        ui.round(plus, ACTIVE_BG, 1.0, 6.0);
     }
     ui.text("+", plus.x, plus.y + ui.s(1.0), plus.w, 15.0, TEXT, false, Align::Center);
     ui.hit(plus, Hit::NewTab);
@@ -357,10 +454,12 @@ pub fn draw_left(
         let item = Area::new(ix, y, iw, item_h);
         let hovered = matches!(hover, Some(Hit::Tab(j) | Hit::CloseTab(j)) if j == i);
         if t.active {
-            ui.fill(item, ACTIVE_BG);
-            ui.fill(Area::new(ix, y + ui.s(10.0), ui.s(3.0), item_h - ui.s(20.0)), ACCENT);
+            ui.round(item, ACTIVE_BG, 1.0, 8.0);
+            let strip = Area::new(ix + ui.s(3.0), y + ui.s(12.0), ui.s(3.0), item_h - ui.s(24.0));
+            ui.glow(strip, EMBER, 0.4, 2.0, 4.0);
+            ui.round(strip, EMBER, 1.0, 1.5);
         } else if hovered {
-            ui.fill(item, HOVER_BG);
+            ui.round(item, HOVER_BG, 1.0, 8.0);
         }
         let (icon, icon_color) = state_icon(t.state, t.ai, tick);
         ui.text(icon, ix + ui.s(12.0), y + ui.s(8.0), ui.s(16.0), 12.0, icon_color, false, Align::Left);
@@ -377,7 +476,7 @@ pub fn draw_left(
         let close = Area::new(item.right() - ui.s(28.0), y + ui.s(13.0), ui.s(22.0), ui.s(22.0));
         if hovered {
             if hover == Some(Hit::CloseTab(i)) {
-                ui.fill(close, BORDER);
+                ui.round(close, BORDER, 1.0, 6.0);
             }
             ui.text("×", close.x, close.y + ui.s(1.0), close.w, 14.0, TEXT, false, Align::Center);
             ui.hit(close, Hit::CloseTab(i));
@@ -393,7 +492,12 @@ pub fn draw_left(
                 ui.text(r, rx, y + ui.s(8.0), close.w + ui.s(20.0), 10.5, color, t.unseen, Align::Right);
             }
             if t.unseen {
-                ui.fill(Area::new(item.right() - ui.s(12.0), y + ui.s(30.0), ui.s(5.0), ui.s(5.0)), ORANGE);
+                ui.round(
+                    Area::new(item.right() - ui.s(12.0), y + ui.s(30.0), ui.s(6.0), ui.s(6.0)),
+                    ORANGE,
+                    1.0,
+                    3.0,
+                );
             }
         }
         ui.hit(item, Hit::Tab(i));
@@ -405,13 +509,16 @@ pub fn draw_left(
         Some(p) => {
             let bh = ui.s(36.0);
             let btn = Area::new(area.x + ui.s(12.0), area.bottom() - ui.s(82.0), area.w - ui.s(24.0), bh);
-            ui.fill(btn, if hover == Some(Hit::NewAi) { [0x2e, 0x32, 0x3c] } else { ACTIVE_BG });
+            if hover == Some(Hit::NewAi) {
+                ui.glow(btn, accent(p), 0.18, 9.0, 10.0);
+            }
+            ui.panel(btn, ACTIVE_BG, if hover == Some(Hit::NewAi) { accent(p) } else { BORDER }, 9.0, 1.0);
             let label = format!("◆  Nueva sesión de {}", p.name());
             ui.text(label, btn.x, btn.y + ui.s(9.0), btn.w, 12.5, accent(p), true, Align::Center);
             ui.hit(btn, Hit::NewAi);
-            format!("⌘T terminal · ⌘⇧C {} · ⌘J agentes", p.name())
+            format!("⌘E mesa · ⌘T terminal · ⌘⇧C {}", p.name())
         }
-        None => "⌘T terminal · ⌘J agentes · ⌘B ocultar".to_string(),
+        None => "⌘E mesa · ⌘T terminal · ⌘J agentes".to_string(),
     };
     ui.text(
         hint,
@@ -778,7 +885,7 @@ pub fn draw_right(
 
 // ---------- panel de mando: todos los agentes de un vistazo ----------
 
-const CARD_BG: Rgb = [0x1a, 0x1d, 0x23];
+const CARD_BG: Rgb = [0x1d, 0x1a, 0x17];
 
 /// Un agente abierto en forge tal como se ve en el panel de mando.
 pub struct DashAgent {
@@ -1359,7 +1466,7 @@ pub fn draw_review(ui: &mut Ui, screen: Area, v: &ReviewView, hover: Option<Hit>
                 ([0x61, 0xaf, 0xef], "")
             }
             LineKind::Note => (DIM, ""),
-            LineKind::Context => ([0xab, 0xb0, 0xb9], " "),
+            LineKind::Context => ([0xc0, 0xb6, 0xab], " "),
         };
         let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
         if matches!(l.kind, LineKind::Hunk | LineKind::Note) {

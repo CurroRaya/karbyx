@@ -431,69 +431,103 @@ fn agents_title(task: &str) -> String {
 
 // ---------- dibujo ----------
 
-const EMBER: Rgb = [0xf0, 0x8a, 0x4b];
-const CARD_BG: Rgb = [0x1b, 0x1e, 0x25];
-const PREVIEW_BG: Rgb = [0x11, 0x13, 0x17];
+use ui::{EMBER, HOT, STEEL};
 
+const CARD_BG: Rgb = [0x1e, 0x1a, 0x17];
+const PREVIEW_BG: Rgb = [0x12, 0x10, 0x0e];
+const EMBER_DEEP: Rgb = [0xd2, 0x5f, 0x2c];
+const ON_EMBER: Rgb = [0x1c, 0x12, 0x0b];
+const FAINT: Rgb = [0x5e, 0x55, 0x4d];
+
+/// Temperatura de cada columna: en la forja, al rojo, templado, frío.
 fn column_color(i: usize) -> Rgb {
     match i {
-        1 => ui::ORANGE,
+        0 => EMBER,
+        1 => HOT,
         2 => ui::GREEN,
-        _ => ui::DIM,
+        _ => STEEL,
     }
+}
+
+/// Latido de una brasa (0.4..1), al ritmo del reloj de la interfaz.
+fn pulse(tick: u64) -> f32 {
+    [0.45, 0.7, 1.0, 0.7][(tick % 4) as usize]
 }
 
 /// Pinta la mesa a pantalla completa.
 pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Option<Hit>) {
     ui.fill(screen, ui::PANEL_BG);
+    // Calor de la forja que sube desde arriba.
+    ui.gradient(Area::new(screen.x, screen.y, screen.w, ui.s(260.0)), (EMBER, 0.045), (EMBER, 0.0), 0.0);
     let pad = ui.s(28.0);
     let x = screen.x + pad;
     let w = screen.w - 2.0 * pad;
     let mut y = screen.y + ui.s(22.0);
 
-    // Cabecera: marca, barra de tarea y consumo de hoy.
-    ui.text("◆ forge", x, y + ui.s(10.0), ui.s(110.0), 16.0, EMBER, true, Align::Left);
-    let right_w = ui.s(170.0);
+    // Marca: el lingote y el nombre.
+    let logo = Area::new(x, y + ui.s(9.0), ui.s(26.0), ui.s(26.0));
+    ui.glow(logo, EMBER, 0.35, 7.0, 12.0);
+    ui.gradient(logo, (HOT, 1.0), (EMBER_DEEP, 1.0), 7.0);
+    ui.text("f", logo.x, logo.y + ui.s(2.0), logo.w, 15.0, ON_EMBER, true, Align::Center);
+    ui.text(
+        "forge",
+        logo.right() + ui.s(10.0),
+        y + ui.s(11.0),
+        ui.s(80.0),
+        17.0,
+        ui::TEXT,
+        true,
+        Align::Left,
+    );
+
+    let right_w = ui.s(150.0);
     ui.text(
         format!("hoy {} tok", ui::tok(v.today)),
         x + w - right_w,
-        y + ui.s(13.0),
+        y + ui.s(14.0),
         right_w,
         11.5,
         ui::DIM,
         false,
         Align::Right,
     );
-    let bar = Area::new(x + ui.s(120.0), y, w - ui.s(120.0) - right_w - ui.s(16.0), ui.s(44.0));
+
+    // Barra de tarea.
+    let bx = x + ui.s(128.0);
+    let bar = Area::new(bx, y, x + w - right_w - ui.s(16.0) - bx, ui.s(46.0));
     let focused = !v.input.is_empty();
-    ui.fill(
-        Area::new(bar.x - 1.0, bar.y - 1.0, bar.w + 2.0, bar.h + 2.0),
-        if focused { EMBER } else { ui::BORDER },
-    );
-    ui.fill(bar, CARD_BG);
-    ui.text("✦", bar.x + ui.s(14.0), bar.y + ui.s(12.0), ui.s(18.0), 14.0, EMBER, false, Align::Left);
+    if focused {
+        ui.glow(bar, EMBER, 0.22, 12.0, 16.0);
+    }
+    ui.panel(bar, CARD_BG, if focused { EMBER } else { ui::BORDER }, 12.0, 1.0);
+    ui.text("✦", bar.x + ui.s(15.0), bar.y + ui.s(12.0), ui.s(18.0), 14.0, EMBER, false, Align::Left);
     // Selector de proyecto y botón de lanzar, a la derecha de la barra.
-    let launch = Area::new(bar.right() - ui.s(118.0), bar.y + ui.s(8.0), ui.s(108.0), bar.h - ui.s(16.0));
-    let lbg = if hover == Some(Hit::BoardLaunch) { ui::ACTIVE_BG } else { ui::HOVER_BG };
-    ui.fill(launch, lbg);
+    let launch = Area::new(bar.right() - ui.s(116.0), bar.y + ui.s(8.0), ui.s(108.0), bar.h - ui.s(16.0));
+    let lhover = hover == Some(Hit::BoardLaunch);
+    if focused || lhover {
+        let top = if lhover { HOT } else { [0xf6, 0x9a, 0x55] };
+        ui.gradient(launch, (top, 1.0), (EMBER_DEEP, 1.0), 8.0);
+    } else {
+        ui.round(launch, ui::HOVER_BG, 1.0, 8.0);
+    }
     ui.text(
         "↵ lanzar",
         launch.x,
-        launch.y + ui.s(5.0),
+        launch.y + ui.s(6.0),
         launch.w,
         12.0,
-        if focused { EMBER } else { ui::DIM },
+        if focused || lhover { ON_EMBER } else { ui::DIM },
         true,
         Align::Center,
     );
     ui.hit(launch, Hit::BoardLaunch);
     let proj = Area::new(launch.x - ui.s(160.0), launch.y, ui.s(152.0), launch.h);
     let pbg = if hover == Some(Hit::BoardProject) { ui::ACTIVE_BG } else { ui::HOVER_BG };
-    ui.fill(proj, pbg);
+    ui.round(proj, pbg, 1.0, 8.0);
     ui.text(
         format!("{} ⇥", v.project),
         proj.x + ui.s(8.0),
-        proj.y + ui.s(5.0),
+        proj.y + ui.s(6.0),
         proj.w - ui.s(16.0),
         12.0,
         ui::TEXT,
@@ -507,7 +541,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
         ui.text(
             "¿Qué hay que hacer?  p. ej. «arregla el test de login que falla»",
             tx,
-            bar.y + ui.s(12.0),
+            bar.y + ui.s(13.0),
             tw,
             14.0,
             ui::DIM,
@@ -524,37 +558,54 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
             v.input.clone()
         };
         let caret = if tick.is_multiple_of(2) { "▏" } else { " " };
-        ui.text(format!("{shown}{caret}"), tx, bar.y + ui.s(12.0), tw, 14.0, ui::TEXT, false, Align::Left);
+        ui.text(format!("{shown}{caret}"), tx, bar.y + ui.s(13.0), tw, 14.0, ui::TEXT, false, Align::Left);
     }
     y += bar.h + ui.s(10.0);
     let (hint, hcolor) = match &v.notice {
-        Some((m, err)) => (m.clone(), if *err { ui::ORANGE } else { ui::GREEN }),
+        Some((m, err)) => (m.clone(), if *err { HOT } else { ui::GREEN }),
         None => (
             "Escribe una tarea y pulsa ↵: forge lanza un agente en su propio worktree. ⇥ cambia de proyecto · ↑↓ elegir agente · ⌘E terminal".into(),
-            ui::DIM,
+            FAINT,
         ),
     };
-    ui.text(hint, bar.x, y, bar.w, 11.0, hcolor, false, Align::Left);
-    y += ui.s(34.0);
+    ui.text(hint, bar.x + ui.s(4.0), y, bar.w, 11.0, hcolor, false, Align::Left);
+    y += ui.s(36.0);
 
     // Columnas.
     let shells_h = if v.shells.is_empty() { 0.0 } else { ui.s(58.0) };
     let bottom = screen.bottom() - pad - shells_h;
-    let gap = ui.s(14.0);
+    let gap = ui.s(16.0);
     let cw = (w - 3.0 * gap) / 4.0;
     let empty = v.columns.iter().all(Vec::is_empty);
     for (i, title) in COLUMNS.iter().enumerate() {
         let cx = x + i as f32 * (cw + gap);
         let count = if i < 3 { v.columns[i].len() } else { v.done.len() };
         let color = column_color(i);
-        ui.text(format!("{}  {count}", title.to_uppercase()), cx, y, cw, 10.5, color, true, Align::Left);
-        ui.fill(Area::new(cx, y + ui.s(20.0), cw, 1.0), ui::BORDER);
-        let mut cy = y + ui.s(30.0);
+        let dot = ui.s(8.0);
+        let dot_a = Area::new(cx, y + ui.s(5.0), dot, dot);
+        if count > 0 && i < 2 {
+            ui.glow(dot_a, color, 0.5 * if i == 0 { pulse(tick) } else { 1.0 }, 4.0, 6.0);
+        }
+        ui.round(dot_a, color, if count > 0 { 1.0 } else { 0.35 }, 4.0);
+        ui.text(title.to_uppercase(), cx + ui.s(16.0), y, cw, 10.5, ui::TEXT, true, Align::Left);
+        ui.text(
+            count.to_string(),
+            cx,
+            y,
+            cw,
+            10.5,
+            if count > 0 { color } else { FAINT },
+            true,
+            Align::Right,
+        );
+        ui.fill(Area::new(cx, y + ui.s(22.0), cw, 1.0), ui::BORDER);
+        ui.fill(Area::new(cx, y + ui.s(22.0), ui.s(36.0), 1.0), color);
+        let mut cy = y + ui.s(34.0);
         if count == 0 && !empty {
             let msg =
                 ["Ningún agente trabajando", "Nadie te espera", "Nada que revisar", "Aún nada fusionado hoy"]
                     [i];
-            ui.text(msg, cx, cy + ui.s(4.0), cw, 11.5, [0x55, 0x5a, 0x66], false, Align::Left);
+            ui.text(msg, cx, cy + ui.s(4.0), cw, 11.5, FAINT, false, Align::Left);
         }
         if i == 3 {
             for d in &v.done {
@@ -562,12 +613,11 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
                     break;
                 }
                 let card = Area::new(cx, cy, cw, ui.s(46.0));
-                ui.fill(Area::new(card.x - 1.0, card.y - 1.0, card.w + 2.0, card.h + 2.0), ui::BORDER);
-                ui.fill(card, ui::PANEL_BG);
-                let (mark, mc) = if d.merged { ("✓", ui::GREEN) } else { ("✕", ui::DIM) };
+                ui.panel(card, [0x19, 0x17, 0x15], ui::BORDER, 9.0, 1.0);
+                let (mark, mc) = if d.merged { ("✓", STEEL) } else { ("✕", FAINT) };
                 ui.text(
                     mark,
-                    card.x + ui.s(10.0),
+                    card.x + ui.s(11.0),
                     card.y + ui.s(6.0),
                     ui.s(14.0),
                     12.0,
@@ -577,22 +627,22 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
                 );
                 ui.text(
                     &d.title,
-                    card.x + ui.s(28.0),
+                    card.x + ui.s(29.0),
                     card.y + ui.s(6.0),
-                    card.w - ui.s(36.0),
+                    card.w - ui.s(38.0),
                     12.0,
-                    ui::TEXT,
+                    [0xc4, 0xbc, 0xb3],
                     false,
                     Align::Left,
                 );
                 let what = if d.merged { "fusionado" } else { "descartado" };
                 ui.text(
                     format!("{} · {what} · {}", d.project, d.at.format("%H:%M")),
-                    card.x + ui.s(28.0),
+                    card.x + ui.s(29.0),
                     card.y + ui.s(25.0),
-                    card.w - ui.s(36.0),
+                    card.w - ui.s(38.0),
                     10.5,
-                    ui::DIM,
+                    FAINT,
                     false,
                     Align::Left,
                 );
@@ -602,7 +652,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
         }
         let cards = &v.columns[i];
         let card_h = ui.s(150.0);
-        let fit = (((bottom - cy) / (card_h + ui.s(10.0))).floor() as usize).max(1);
+        let fit = (((bottom - cy) / (card_h + ui.s(12.0))).floor() as usize).max(1);
         for (k, c) in cards.iter().enumerate() {
             if k + 1 == fit && cards.len() > fit {
                 ui.text(
@@ -618,16 +668,20 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
                 break;
             }
             draw_card(ui, Area::new(cx, cy, cw, card_h), c, i, v.selected == Some(c.pane), tick, hover);
-            cy += card_h + ui.s(10.0);
+            cy += card_h + ui.s(12.0);
         }
     }
     if empty {
-        let my = y + ui.s(120.0);
-        ui.text("Tu mesa está vacía", x, my, w, 18.0, ui::TEXT, true, Align::Center);
+        let my = y + ui.s(110.0);
+        let anvil = Area::new(x + w / 2.0 - ui.s(22.0), my, ui.s(44.0), ui.s(44.0));
+        ui.glow(anvil, EMBER, 0.18, 12.0, 22.0);
+        ui.panel(anvil, CARD_BG, ui::BORDER, 12.0, 1.0);
+        ui.text("✦", anvil.x, anvil.y + ui.s(10.0), anvil.w, 17.0, EMBER, false, Align::Center);
+        ui.text("La forja está fría", x, my + ui.s(62.0), w, 18.0, ui::TEXT, true, Align::Center);
         ui.text(
             "Escribe arriba lo que hay que hacer y pulsa ↵. Cada agente trabaja en su propia copia del proyecto; tú revisas y fusionas.",
             x,
-            my + ui.s(30.0),
+            my + ui.s(92.0),
             w,
             12.5,
             ui::DIM,
@@ -640,7 +694,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
     if !v.shells.is_empty() {
         let sy = screen.bottom() - pad - shells_h + ui.s(14.0);
         ui.fill(Area::new(x, sy - ui.s(8.0), w, 1.0), ui::BORDER);
-        ui.text("TERMINALES", x, sy + ui.s(8.0), ui.s(100.0), 10.5, ui::DIM, true, Align::Left);
+        ui.text("TERMINALES", x, sy + ui.s(8.0), ui.s(100.0), 10.5, FAINT, true, Align::Left);
         let mut chip_x = x + ui.s(100.0);
         let chip_w = ui.s(230.0);
         for s in &v.shells {
@@ -648,13 +702,14 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
                 break;
             }
             let chip = Area::new(chip_x, sy + ui.s(2.0), chip_w, ui.s(28.0));
-            let bg = if hover == Some(Hit::BoardShell(s.pane)) { ui::ACTIVE_BG } else { CARD_BG };
-            ui.fill(chip, bg);
+            let h = hover == Some(Hit::BoardShell(s.pane));
+            ui.panel(chip, if h { ui::ACTIVE_BG } else { CARD_BG }, ui::BORDER, 8.0, 1.0);
+            ui.text("❯", chip.x + ui.s(10.0), chip.y + ui.s(6.0), ui.s(14.0), 11.5, EMBER, true, Align::Left);
             ui.text(
-                format!("❯ {}", s.label),
-                chip.x + ui.s(10.0),
+                &s.label,
+                chip.x + ui.s(26.0),
                 chip.y + ui.s(6.0),
-                chip.w - ui.s(20.0),
+                chip.w - ui.s(36.0),
                 11.5,
                 ui::TEXT,
                 false,
@@ -667,20 +722,36 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
 }
 
 fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u64, hover: Option<Hit>) {
+    let heat = column_color(col);
+    let hovered = hover == Some(Hit::BoardCard(c.pane));
+    // Lo que te espera brilla; lo seleccionado, también.
+    if col == 1 {
+        ui.glow(a, HOT, 0.16, 10.0, 14.0);
+    } else if selected {
+        ui.glow(a, EMBER, 0.14, 10.0, 12.0);
+    }
     let border = if selected {
         EMBER
     } else if col == 1 {
-        ui::ORANGE
-    } else if hover == Some(Hit::BoardCard(c.pane)) {
-        [0x3a, 0x3f, 0x4b]
+        HOT
+    } else if hovered {
+        [0x4a, 0x3f, 0x36]
     } else {
         ui::BORDER
     };
-    let bw = if selected || col == 1 { ui.s(2.0) } else { 1.0 };
-    ui.fill(Area::new(a.x - bw, a.y - bw, a.w + 2.0 * bw, a.h + 2.0 * bw), border);
-    ui.fill(a, CARD_BG);
-    let px = ui.s(12.0);
-    let iw = a.w - 2.0 * px;
+    let bw = if selected || col == 1 { ui.s(1.5) } else { 1.0 };
+    ui.panel(a, if hovered { [0x23, 0x1e, 0x1a] } else { CARD_BG }, border, 10.0, bw);
+    // Calor de la tarjeta: un tinte arriba y la barra de temperatura a la izquierda.
+    ui.gradient(Area::new(a.x, a.y, a.w, ui.s(46.0)), (heat, 0.05), (heat, 0.0), 10.0);
+    let alpha = if col == 0 { pulse(tick) } else { 0.9 };
+    let strip = Area::new(a.x + ui.s(5.0), a.y + ui.s(12.0), ui.s(3.0), a.h - ui.s(24.0));
+    if col == 0 {
+        ui.glow(strip, EMBER, 0.45 * alpha, 2.0, 5.0);
+    }
+    ui.round(strip, heat, alpha, 1.5);
+
+    let px = ui.s(16.0);
+    let iw = a.w - px - ui.s(12.0);
     let (icon, icolor) = ui::state_icon(c.state, c.ai, tick);
     ui.text(icon, a.x + px, a.y + ui.s(10.0), ui.s(16.0), 12.0, icolor, false, Align::Left);
     ui.text(
@@ -709,10 +780,10 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
     );
 
     // Lo que hace ahora y las últimas líneas de su terminal.
-    let dcolor = if col == 1 { ui::ORANGE } else { ui::TEXT };
+    let dcolor = if col == 1 { HOT } else { ui::TEXT };
     ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), iw, 11.5, dcolor, false, Align::Left);
     let pv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(48.0));
-    ui.fill(pv, PREVIEW_BG);
+    ui.round(pv, PREVIEW_BG, 1.0, 6.0);
     for (k, l) in c.preview.iter().enumerate() {
         ui.text(
             l,
@@ -751,14 +822,16 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
     }
     ui.text(meta.join(" · "), fx, fy, a.right() - fx - px, 11.0, ui::DIM, false, Align::Left);
     if c.branch.is_some() && c.stats.is_some_and(|s| s.2 > 0) && col != 0 {
-        let b = Area::new(a.right() - px - ui.s(84.0), fy - ui.s(4.0), ui.s(84.0), ui.s(22.0));
-        let bg = if hover == Some(Hit::BoardReview(c.pane)) { ui::ACTIVE_BG } else { ui::HOVER_BG };
-        ui.fill(b, bg);
-        ui.text("Revisar ⌘R", b.x, b.y + ui.s(4.0), b.w, 11.0, ui::GREEN, true, Align::Center);
+        let b = Area::new(a.right() - ui.s(12.0) - ui.s(88.0), fy - ui.s(5.0), ui.s(88.0), ui.s(24.0));
+        let h = hover == Some(Hit::BoardReview(c.pane));
+        ui.round(b, ui::GREEN, if h { 0.28 } else { 0.14 }, 7.0);
+        ui.text("Revisar ⌘R", b.x, b.y + ui.s(5.0), b.w, 11.0, ui::GREEN, true, Align::Center);
         ui.hit(b, Hit::BoardReview(c.pane));
     }
     if c.unseen {
-        ui.fill(Area::new(a.right() - ui.s(14.0), a.y + ui.s(14.0), ui.s(6.0), ui.s(6.0)), ui::ORANGE);
+        let d = Area::new(a.right() - ui.s(16.0), a.y + ui.s(14.0), ui.s(7.0), ui.s(7.0));
+        ui.glow(d, HOT, 0.5, 4.0, 5.0);
+        ui.round(d, HOT, 1.0, 4.0);
     }
     ui.hit(a, Hit::BoardCard(c.pane));
 }
