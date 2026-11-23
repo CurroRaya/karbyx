@@ -140,6 +140,11 @@ Es la pantalla con la que abre forge.
 - **Columnas**: *Trabajando*, *Te necesita*, *Para revisar* y *Hecho hoy*.
   Cada tarjeta muestra la tarea, el proyecto y la rama, lo que hace ahora,
   las últimas líneas de su terminal, sus `+/−` y sus tokens.
+- **Responder sin entrar**: cuando un agente te pide permiso («¿Aplico este
+  cambio en login.rs?»), su tarjeta muestra la pregunta y un botón por opción
+  (*Sí*, *Sí, siempre*, *No*). Un clic, o la tecla 1-3 con la tarjeta
+  seleccionada, responde en su terminal. forge vuelve a leer la pantalla antes
+  de enviar nada: si la pregunta ya no está, no responde.
 - Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
   (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
 - **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan

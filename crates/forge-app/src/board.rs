@@ -70,6 +70,113 @@ pub struct Card {
     pub state: Option<AgentState>,
     pub ai: Option<Provider>,
     pub unseen: bool,
+    /// Pregunta con opciones que el agente tiene en pantalla.
+    pub choice: Option<Choice>,
+}
+
+/// Un menú de opciones del asistente («Do you want to…? ❯ 1. Yes  2. No»).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub question: String,
+    /// Texto de cada opción, en orden (la 1 es la primera).
+    pub options: Vec<String>,
+    /// Opción marcada ahora con ❯ (índice desde 0).
+    pub current: usize,
+}
+
+/// Una línea de opción: (marcada, número, texto).
+fn option_line(l: &str) -> Option<(bool, usize, String)> {
+    let t = l.trim();
+    let (marked, rest) = match t.strip_prefix(['❯', '›', '>']) {
+        Some(r) => (true, r.trim_start()),
+        None => (false, t),
+    };
+    let (num, label) = rest.split_once(". ")?;
+    let n: usize = num.parse().ok().filter(|n| (1..=9).contains(n))?;
+    let label = label.trim();
+    (!label.is_empty()).then(|| (marked, n, label.to_string()))
+}
+
+/// Busca un menú de opciones al final del texto de una terminal.
+pub fn parse_choice(text: &str) -> Option<Choice> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim().trim_matches(['│', '┃', '|']).trim())
+        .filter(|l| !l.is_empty() && !l.chars().all(|c| ('\u{2500}'..='\u{257f}').contains(&c)))
+        .collect();
+    let lines = &lines[lines.len().saturating_sub(30)..];
+    // Las opciones tienen que estar al final (como mucho unas líneas de ayuda debajo).
+    let last = lines.iter().rposition(|l| option_line(l).is_some())?;
+    if lines.len() - 1 - last > 3 {
+        return None;
+    }
+    let mut first = last;
+    while first > 0 && option_line(lines[first - 1]).is_some() {
+        first -= 1;
+    }
+    let opts: Vec<(bool, usize, String)> =
+        lines[first..=last].iter().filter_map(|l| option_line(l)).collect();
+    let numbered = opts.iter().enumerate().all(|(i, o)| o.1 == i + 1);
+    let marked: Vec<usize> = opts.iter().enumerate().filter(|(_, o)| o.0).map(|(i, _)| i).collect();
+    if opts.len() < 2 || !numbered || marked.len() != 1 {
+        return None;
+    }
+    let above = &lines[first.saturating_sub(4)..first];
+    let question = above
+        .iter()
+        .rev()
+        .find(|l| l.ends_with('?'))
+        .or(above.last())
+        .map(|l| l.to_string())
+        .unwrap_or_default();
+    Some(Choice { question, options: opts.into_iter().map(|o| o.2).collect(), current: marked[0] })
+}
+
+/// Etiqueta corta en español para el botón de una opción.
+pub fn short_option(label: &str) -> String {
+    let mut t = label.trim().to_string();
+    // Quita la pista de tecla del final: «(esc)», «(shift+tab)».
+    if t.ends_with(')')
+        && let Some(i) = t.rfind(" (")
+    {
+        t.truncate(i);
+    }
+    let l = t.to_lowercase();
+    if l == "yes" || l == "sí" || l == "si" {
+        "Sí".into()
+    } else if l.starts_with("yes")
+        && (l.contains("don't ask") || l.contains("allow all") || l.contains("always"))
+    {
+        "Sí, siempre".into()
+    } else if l == "no" || l.starts_with("no,") {
+        "No".into()
+    } else {
+        crate::agents::one_line(&t, 20)
+    }
+}
+
+/// Traduce las preguntas habituales de Claude Code.
+pub fn translate_question(q: &str) -> String {
+    let t = q.trim();
+    let rest = |p: &str| t.strip_prefix(p).map(|r| r.trim_end_matches('?').trim().to_string());
+    if let Some(f) = rest("Do you want to make this edit to") {
+        format!("¿Aplico este cambio en {f}?")
+    } else if let Some(f) = rest("Do you want to create") {
+        format!("¿Creo {f}?")
+    } else if t.starts_with("Do you want to allow Claude to fetch") {
+        "¿Dejo que Claude lea esta página?".into()
+    } else if t == "Do you want to proceed?" {
+        "¿Sigo adelante?".into()
+    } else if t.is_empty() {
+        "¿Qué hago?".into()
+    } else {
+        t.to_string()
+    }
+}
+
+/// Bytes para elegir la opción `idx` (desde 0) de un menú.
+fn answer_bytes(choice: &Choice, idx: usize) -> Vec<u8> {
+    if idx == choice.current { b"\r".to_vec() } else { (idx + 1).to_string().into_bytes() }
 }
 
 /// Una terminal normal (sin agente), en la tira de abajo.
@@ -175,7 +282,11 @@ impl App {
                 };
                 let a = p.agent.as_ref();
                 let state = a.map(|a| a.state);
+                let tail = p.session.tail_text(30);
+                let choice = parse_choice(&tail);
+                // Un menú en pantalla es que te necesita, diga lo que diga el estado.
                 let col = match state {
+                    _ if choice.is_some() => 1,
                     Some(AgentState::Waiting) => 1,
                     Some(AgentState::Done) => 2,
                     _ => 0,
@@ -193,13 +304,14 @@ impl App {
                     project: p.project.clone(),
                     branch: p.worktree.as_ref().map(|w| w.name().to_string()),
                     detail,
-                    preview: preview_lines(&p.session.tail_text(30), 3),
+                    preview: preview_lines(&tail, 3),
                     stats: self.board.stats.get(&id).copied(),
                     elapsed: a.map(|a| ago(a.since)).unwrap_or_default(),
                     tokens,
                     state,
                     ai,
                     unseen: a.is_some_and(|a| a.unseen),
+                    choice,
                 });
             }
         }
@@ -386,6 +498,18 @@ impl App {
                 if self.mods.super_key() || self.mods.control_key() {
                     return false;
                 }
+                // Con la barra vacía y un agente con pregunta seleccionado, 1-9 responde.
+                if self.board.input.is_empty()
+                    && let Some(sel) = self.board.sel
+                    && let Some(d) = event.text.as_deref().and_then(|t| t.parse::<usize>().ok())
+                    && (1..=9).contains(&d)
+                    && let Some(p) = self.panes.get(&sel)
+                    && parse_choice(&p.session.tail_text(30)).is_some_and(|c| d <= c.options.len())
+                {
+                    self.board_answer(sel, d - 1);
+                    self.redraw();
+                    return true;
+                }
                 if let Some(text) = event.text.as_deref().filter(|t| !t.chars().any(char::is_control)) {
                     self.board.input.push_str(text);
                     self.board.notice = None;
@@ -396,8 +520,25 @@ impl App {
         true
     }
 
+    /// Responde al menú que el agente `pane` tiene en pantalla. Se vuelve a
+    /// leer la pantalla: si el menú ya no está, no se envía nada.
+    pub(super) fn board_answer(&mut self, pane: PaneId, idx: usize) {
+        let Some(p) = self.panes.get_mut(&pane) else { return };
+        let Some(choice) = parse_choice(&p.session.tail_text(30)) else {
+            self.board.notice = Some(("Esa pregunta ya no está en pantalla".into(), true));
+            return;
+        };
+        let Some(label) = choice.options.get(idx) else { return };
+        p.session.write(answer_bytes(&choice, idx));
+        if let Some(a) = p.agent.as_mut() {
+            a.unseen = false;
+        }
+        self.board.notice = Some((format!("Respondido: {}", short_option(label)), false));
+    }
+
     pub(super) fn board_click(&mut self, hit: Hit) {
         match hit {
+            Hit::BoardAnswer(p, i) => self.board_answer(p, i as usize),
             Hit::BoardCard(p) | Hit::BoardShell(p) => self.go_to_pane(p),
             Hit::BoardReview(p) => {
                 self.go_to_pane(p);
@@ -564,7 +705,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
     let (hint, hcolor) = match &v.notice {
         Some((m, err)) => (m.clone(), if *err { HOT } else { ui::GREEN }),
         None => (
-            "Escribe una tarea y pulsa ↵: forge lanza un agente en su propio worktree. ⇥ cambia de proyecto · ↑↓ elegir agente · ⌘E terminal".into(),
+            "Escribe una tarea y pulsa ↵: forge lanza un agente en su propio worktree. ⇥ proyecto · ↑↓ elegir agente · 1-3 responder · ⌘E terminal".into(),
             FAINT,
         ),
     };
@@ -779,24 +920,67 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
         Align::Left,
     );
 
-    // Lo que hace ahora y las últimas líneas de su terminal.
-    let dcolor = if col == 1 { HOT } else { ui::TEXT };
-    ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), iw, 11.5, dcolor, false, Align::Left);
-    let pv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(48.0));
-    ui.round(pv, PREVIEW_BG, 1.0, 6.0);
-    for (k, l) in c.preview.iter().enumerate() {
-        ui.text(
-            l,
-            pv.x + ui.s(8.0),
-            pv.y + ui.s(4.0) + k as f32 * ui.s(14.0),
-            pv.w - ui.s(16.0),
-            10.0,
-            ui::DIM,
-            false,
-            Align::Left,
-        );
-        if let Some(lab) = ui.labels.last_mut() {
-            lab.font = ui::Font::Mono;
+    if let Some(ch) = &c.choice {
+        // La pregunta y un botón por opción: se responde sin abrir la terminal.
+        let q = translate_question(&ch.question);
+        ui.text(q, a.x + px, a.y + ui.s(50.0), iw, 11.5, HOT, true, Align::Left);
+        let shown = ch.options.len().min(3);
+        let gap = ui.s(6.0);
+        let bw = (iw - gap * (shown as f32 - 1.0)) / shown as f32;
+        for (k, opt) in ch.options.iter().take(shown).enumerate() {
+            let b = Area::new(a.x + px + k as f32 * (bw + gap), a.y + ui.s(74.0), bw, ui.s(34.0));
+            let label = short_option(opt);
+            let color = match label.as_str() {
+                "Sí" => ui::GREEN,
+                "No" => ui::RED,
+                _ => EMBER,
+            };
+            let h = hover == Some(Hit::BoardAnswer(c.pane, k as u8));
+            if h {
+                ui.glow(b, color, 0.2, 8.0, 8.0);
+            }
+            ui.round(b, color, if h { 0.3 } else { 0.14 }, 8.0);
+            if k == ch.current {
+                // La opción que Claude tiene marcada: la que elige ↵ en su terminal.
+                ui.round(
+                    Area::new(b.x + ui.s(8.0), b.bottom() - ui.s(5.0), b.w - ui.s(16.0), ui.s(2.0)),
+                    color,
+                    0.6,
+                    1.0,
+                );
+            }
+            ui.text(
+                format!("{} {label}", k + 1),
+                b.x + ui.s(4.0),
+                b.y + ui.s(8.0),
+                b.w - ui.s(8.0),
+                11.5,
+                color,
+                true,
+                Align::Center,
+            );
+            ui.hit(b, Hit::BoardAnswer(c.pane, k as u8));
+        }
+    } else {
+        // Lo que hace ahora y las últimas líneas de su terminal.
+        let dcolor = if col == 1 { HOT } else { ui::TEXT };
+        ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), iw, 11.5, dcolor, false, Align::Left);
+        let pv = Area::new(a.x + px, a.y + ui.s(70.0), iw, ui.s(48.0));
+        ui.round(pv, PREVIEW_BG, 1.0, 6.0);
+        for (k, l) in c.preview.iter().enumerate() {
+            ui.text(
+                l,
+                pv.x + ui.s(8.0),
+                pv.y + ui.s(4.0) + k as f32 * ui.s(14.0),
+                pv.w - ui.s(16.0),
+                10.0,
+                ui::DIM,
+                false,
+                Align::Left,
+            );
+            if let Some(lab) = ui.labels.last_mut() {
+                lab.font = ui::Font::Mono;
+            }
         }
     }
 
@@ -839,6 +1023,27 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_permission_menu() {
+        let screen = "⏺ Update(src/main.rs)\n╭────────────────────────╮\n│ Edit file              │\n│ Do you want to make this edit to main.rs? │\n│ ❯ 1. Yes               │\n│   2. Yes, allow all edits during this session (shift+tab) │\n│   3. No, and tell Claude what to do differently (esc) │\n╰────────────────────────╯\n";
+        let c = parse_choice(screen).unwrap();
+        assert_eq!(c.question, "Do you want to make this edit to main.rs?");
+        assert_eq!(translate_question(&c.question), "¿Aplico este cambio en main.rs?");
+        assert_eq!(c.options.len(), 3);
+        assert_eq!(c.current, 0);
+        let short: Vec<String> = c.options.iter().map(|o| short_option(o)).collect();
+        assert_eq!(short, ["Sí", "Sí, siempre", "No"]);
+        assert_eq!(answer_bytes(&c, 0), b"\r");
+        assert_eq!(answer_bytes(&c, 2), b"3");
+        // Sin marco y con la ayuda debajo.
+        let plain = "Do you want to proceed?\n  1. Yes\n❯ 2. No\n\nEsc to cancel";
+        let c = parse_choice(plain).unwrap();
+        assert_eq!((c.current, c.options.len()), (1, 2));
+        // Una lista numerada normal (sin ❯) o que no está al final no es un menú.
+        assert!(parse_choice("Pasos:\n1. Compilar\n2. Probar\n").is_none());
+        assert!(parse_choice("❯ 1. Yes\n  2. No\nuno\ndos\ntres\ncuatro").is_none());
+    }
 
     #[test]
     fn preview_skips_assistant_chrome() {

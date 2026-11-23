@@ -141,6 +141,8 @@ pub enum Hit {
     BoardCard(u64),
     BoardShell(u64),
     BoardReview(u64),
+    /// Mesa: responder a la pregunta de un agente (panel, opción desde 0).
+    BoardAnswer(u64, u8),
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
     BoardLaunch,

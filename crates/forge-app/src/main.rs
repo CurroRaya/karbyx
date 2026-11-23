@@ -914,6 +914,7 @@ impl App {
             Hit::BoardCard(_)
             | Hit::BoardShell(_)
             | Hit::BoardReview(_)
+            | Hit::BoardAnswer(..)
             | Hit::BoardProject
             | Hit::BoardLaunch => self.board_click(hit),
         }
