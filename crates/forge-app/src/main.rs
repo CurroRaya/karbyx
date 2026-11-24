@@ -233,7 +233,9 @@ enum UserEvent {
     /// Servidores MCP encontrados (búsqueda, programas instalados, fichas).
     McpFound(String, Vec<&'static str>, Result<Vec<forge_agent::registry::Entry>, String>),
     /// Habilidades encontradas para instalar.
-    Skills(Box<Result<forge_agent::install::Bundle, String>>),
+    Skills(u64, Box<Result<forge_agent::install::Bundle, String>>),
+    /// Habilidades encontradas en el catálogo.
+    SkillHits(u64, Result<Vec<forge_agent::catalog::Hit>, String>),
     /// Carpeta elegida para el chat.
     Folder(PathBuf),
     /// Modo de prueba: mensaje para el chat.
@@ -2133,7 +2135,8 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Probe(server, r) => self.on_probe(*server, r),
             UserEvent::McpProbe(name, config, r) => self.on_mcp_probe(name, *config, r),
             UserEvent::McpFound(q, p, r) => self.on_mcp_found(q, p, r),
-            UserEvent::Skills(r) => self.on_skills(*r),
+            UserEvent::Skills(t, r) => self.on_skills(t, *r),
+            UserEvent::SkillHits(t, r) => self.on_skill_hits(t, r),
             UserEvent::Folder(p) => self.set_chat_project(Some(p)),
             UserEvent::ChatSay(t) if t == "!discard" => self.review_click(Hit::ReviewDiscard, event_loop),
             UserEvent::ChatSay(t) => self.chat_say(t),

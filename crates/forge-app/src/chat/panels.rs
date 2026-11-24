@@ -456,25 +456,73 @@ fn mcp_detail(ui: &mut Ui, screen: Area, f: &McpSearch, e: &Entry, env: &Env) ->
     max
 }
 
+/// Buscar habilidades por nombre, o traerlas de una dirección.
+fn skill_search(ui: &mut Ui, screen: Area, f: &SkillForm, know: &Know, env: &Env) -> f32 {
+    let about = "En skills.sh (lo que escribas se envía a su web al pulsar ↵), o una dirección o carpeta.";
+    let (x, w, top, a) = window(ui, screen, 780.0, 640.0, "Buscar habilidades", about);
+    let go = ui.s(100.0);
+    let b = Area::new(x, top, w - go - ui.s(8.0), ui.s(40.0));
+    field(ui, b, &f.url, "pdf, code review… o dueño/repositorio", true, false);
+    primary(ui, "Buscar ↵", x + w, top + ui.s(2.0), go, ChatHit::SkillFetch, env);
+    let list = top + ui.s(54.0);
+    let by = a.bottom() - ui.s(52.0);
+    let view = Area::new(x, list, w, by - ui.s(34.0) - list);
+    let warn = "⚠ Nadie comprueba que sean de fiar. Antes de instalar verás lo que contienen: léelo.";
+    ui.text(warn, x, by - ui.s(24.0), w, 11.5, HOT, false, Align::Left);
+    let msg = match (&f.error, &f.hits, f.busy) {
+        (_, Some(_), true) => Some(("Bajándola de GitHub para enseñártela…".to_string(), HOT)),
+        (_, None, true) => Some(("Buscando…".into(), HOT)),
+        (Some(e), ..) => Some((e.clone(), ui::RED)),
+        (_, Some(h), _) if h.is_empty() => Some(("No hay ninguna con ese nombre.".into(), DIM)),
+        _ => None,
+    };
+    // El mensaje va abajo si hay lista, para no taparla.
+    if let Some((t, c)) = msg {
+        let y =
+            if f.hits.as_ref().is_some_and(|h| !h.is_empty()) { by + ui.s(9.0) } else { list + ui.s(6.0) };
+        ui.text(t, x, y, w - ui.s(110.0), 12.5, c, false, Align::Left);
+    }
+    let row = ui.s(48.0);
+    let mut y = list - f.scroll;
+    ui.clip = Some(view);
+    for (i, h) in f.hits.iter().flatten().enumerate() {
+        let r = Area::new(x, y, w, row);
+        y += row;
+        if r.bottom() < view.y || r.y > view.bottom() {
+            continue;
+        }
+        let hit = ChatHit::SkillHit(i as u16);
+        if env.hover == Some(hit) || (f.busy && f.wanted == Some(i)) {
+            ui.round(r.intersect(view), ui::ACTIVE_BG, 1.0, 8.0);
+        }
+        let (px, ty) = (x + ui.s(12.0), r.y);
+        ui.text(&h.name, px, ty + ui.s(6.0), w * 0.6, 13.5, TEXT, true, Align::Left);
+        ui.text(
+            format!("github.com/{}", h.source),
+            px,
+            ty + ui.s(25.0),
+            w * 0.7,
+            11.5,
+            EMBER,
+            false,
+            Align::Left,
+        );
+        let have = if skill_exists(know, &h.name) { "ya la tienes · " } else { "" };
+        let t = format!("{have}{} instalaciones", ui::tok(h.installs));
+        ui.text(t, px, ty + ui.s(15.0), w - ui.s(24.0), 11.5, FAINT, false, Align::Right);
+        if !f.busy {
+            ui.hit(r, Hit::Chat(hit));
+        }
+    }
+    ui.clip = None;
+    secondary(ui, "Volver", x + w, by, ui.s(90.0), ChatHit::ExtendBack, env);
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
+    (y + f.scroll - list - view.h).max(0.0)
+}
+
 /// Instalar habilidades. Devuelve cuánto se puede desplazar.
 pub fn skill_form(ui: &mut Ui, screen: Area, f: &SkillForm, know: &Know, env: &Env) -> f32 {
-    let Some(b) = &f.bundle else {
-        let about = "De un repositorio público de GitHub (dueño/nombre o su dirección) o de una carpeta.";
-        let (x, w, mut y, a) = window(ui, screen, 640.0, 270.0, "Instalar habilidades", about);
-        field(ui, Area::new(x, y, w, ui.s(40.0)), &f.url, "dueño/repositorio", true, false);
-        y += ui.s(54.0);
-        let (t, c) = match (&f.error, f.busy) {
-            (_, true) => ("Buscando…".to_string(), HOT),
-            (Some(e), _) => (e.clone(), ui::RED),
-            _ => ("Primero las verás; nada se instala ni se ejecuta al buscar.".into(), FAINT),
-        };
-        ui.text(t, x, y, w, 12.5, c, false, Align::Left);
-        let by = a.bottom() - ui.s(52.0);
-        let r = primary(ui, "Buscar  ↵", x + w, by, ui.s(110.0), ChatHit::SkillFetch, env) - ui.s(8.0);
-        secondary(ui, "Volver", r, by, ui.s(90.0), ChatHit::ExtendBack, env);
-        ui.hit(a, Hit::Chat(ChatHit::Inside));
-        return 0.0;
-    };
+    let Some(b) = &f.bundle else { return skill_search(ui, screen, f, know, env) };
     match f.sel.and_then(|i| b.found.get(i)) {
         None => {
             let (x, w, top, a) = window(ui, screen, 760.0, 600.0, "Elige una habilidad", &b.from);

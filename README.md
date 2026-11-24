@@ -266,10 +266,12 @@ cuenta en cada conversación.
   Los pasos, en Markdown.
   ```
 
-  **Instalar de GitHub…** las baja de un repositorio público (`dueño/nombre` o su
-  dirección) o de una carpeta: te enseña el `SKILL.md` entero y qué archivos trae
-  antes de copiarla. Nada se ejecuta al instalar, y los programas pierden el
-  permiso de ejecución.
+  **Buscar e instalar…** las busca por nombre en [skills.sh](https://skills.sh) (lo
+  que escribes se envía a su web al pulsar ↵), o las trae de una dirección de GitHub
+  (`dueño/nombre`) o de una carpeta. Siempre se bajan del repositorio y te enseña el
+  `SKILL.md` entero y qué archivos trae antes de copiarla. Nada se ejecuta al
+  instalar, y los programas pierden el permiso de ejecución. Nadie comprueba que
+  sean de fiar, por muchas instalaciones que tengan.
 
   Las tuyas van en `~/.config/forge/skills/<nombre>/`; las de un proyecto, en
   `.forge/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de

@@ -103,6 +103,7 @@ pub enum ChatHit {
     /// Instalar habilidades.
     SkillAdd,
     SkillFetch,
+    SkillHit(u16),
     SkillPick(u16),
     SkillInstall,
     ExtendBack,
@@ -2083,6 +2084,10 @@ impl App {
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
             "!skill" => self.chat_click(ChatHit::SkillAdd),
             "!fetch" => self.chat_click(ChatHit::SkillFetch),
+            t if t.starts_with("!hit ") => {
+                self.chat_click(ChatHit::SkillHit(t[5..].parse().unwrap_or(0)));
+            }
+            "!back" => self.chat_click(ChatHit::ExtendBack),
             "!skillpick" => self.chat_click(ChatHit::SkillPick(0)),
             "!install" => self.chat_click(ChatHit::SkillInstall),
             "!allowtool" => {

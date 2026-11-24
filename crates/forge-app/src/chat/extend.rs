@@ -7,8 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use forge_agent::catalog::{self, Hit};
 use forge_agent::install::{self, Bundle, From};
 use forge_agent::know::Know;
 use forge_agent::mcp::{self, Client, Config, Tool};
@@ -153,11 +154,26 @@ pub struct SkillForm {
     pub url: Editor,
     pub busy: bool,
     pub error: Option<String>,
+    /// Lo que dio el catálogo, y la que se ha elegido de ahí.
+    pub hits: Option<Vec<Hit>>,
+    pub wanted: Option<usize>,
     pub bundle: Option<Bundle>,
+    /// Para descartar lo que llegue de una búsqueda anterior.
+    ticket: u64,
     /// La que se está mirando, y su desplazamiento en líneas.
     pub sel: Option<usize>,
     pub scroll: f32,
     pub max: f32,
+}
+
+impl SkillForm {
+    /// Empieza una búsqueda o una descarga.
+    fn start(&mut self) -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        (self.busy, self.error, self.bundle, self.sel) = (true, None, None, None);
+        self.ticket = NEXT.fetch_add(1, Ordering::Relaxed);
+        self.ticket
+    }
 }
 
 fn mcp_path() -> PathBuf {
@@ -563,32 +579,76 @@ impl App {
     /// Busca habilidades en lo que se escribió.
     fn fetch_skills(&mut self) {
         let Popup::Skill(f) = &mut self.chats.popup else { return };
-        if f.busy {
+        if f.busy || f.url.text().trim().is_empty() {
             return;
         }
-        let from = match From::parse(f.url.text()) {
-            Ok(x) => x,
-            Err(e) => {
-                f.error = Some(e);
-                return;
-            }
-        };
-        (f.busy, f.error, f.bundle, f.sel) = (true, None, None, None);
+        let text = f.url.text().to_string();
+        (f.hits, f.wanted, f.scroll) = (None, None, 0.0);
+        if !catalog::is_address(&text) {
+            let ticket = f.start();
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                let r = catalog::search(&text);
+                let _ = proxy.send_event(UserEvent::SkillHits(ticket, r));
+            });
+            return;
+        }
+        match From::parse(&text) {
+            Ok(from) => self.download_skills(from),
+            Err(e) => f.error = Some(e),
+        }
+    }
+
+    /// La elegida en el catálogo: se baja su repositorio para enseñarla.
+    fn pick_hit(&mut self, i: usize) {
+        let Popup::Skill(f) = &mut self.chats.popup else { return };
+        let Some(source) = f.hits.as_ref().and_then(|h| h.get(i)).map(|h| h.source.clone()) else { return };
+        f.wanted = Some(i);
+        match From::parse(&source) {
+            Ok(from) => self.download_skills(from),
+            Err(e) => f.error = Some(e),
+        }
+    }
+
+    fn download_skills(&mut self, from: From) {
+        let Popup::Skill(f) = &mut self.chats.popup else { return };
+        let ticket = f.start();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
             let r = install::fetch(&from);
-            let _ = proxy.send_event(UserEvent::Skills(Box::new(r)));
+            let _ = proxy.send_event(UserEvent::Skills(ticket, Box::new(r)));
         });
     }
 
-    pub(crate) fn on_skills(&mut self, r: Result<Bundle, String>) {
+    pub(crate) fn on_skill_hits(&mut self, ticket: u64, r: Result<Vec<Hit>, String>) {
         if let Popup::Skill(f) = &mut self.chats.popup
             && f.busy
+            && f.ticket == ticket
+        {
+            f.busy = false;
+            match r {
+                Ok(h) => f.hits = Some(h),
+                Err(e) => f.error = Some(e),
+            }
+        }
+        self.redraw();
+    }
+
+    pub(crate) fn on_skills(&mut self, ticket: u64, r: Result<Bundle, String>) {
+        if let Popup::Skill(f) = &mut self.chats.popup
+            && f.busy
+            && f.ticket == ticket
         {
             f.busy = false;
             match r {
                 Ok(b) => {
-                    f.sel = (b.found.len() == 1).then_some(0);
+                    let name = f.wanted.and_then(|i| Some(f.hits.as_ref()?.get(i)?.name.clone()));
+                    // Si el catálogo dice una que ya no está, se enseñan todas.
+                    f.sel = match name {
+                        Some(n) => b.position(&n),
+                        None => (b.found.len() == 1).then_some(0),
+                    };
+                    f.scroll = 0.0;
                     f.bundle = Some(b);
                 }
                 Err(e) => f.error = Some(e),
@@ -604,7 +664,9 @@ impl App {
             Ok(()) => {
                 let name = s.name.clone();
                 // Si hay más, se vuelve a la lista.
-                if b.found.len() > 1 {
+                if f.hits.is_some() {
+                    (f.bundle, f.sel, f.wanted, f.scroll) = (None, None, None, 0.0);
+                } else if b.found.len() > 1 {
                     (f.sel, f.scroll) = (None, 0.0);
                 } else {
                     self.chats.popup = Popup::None;
@@ -638,6 +700,11 @@ impl App {
             Popup::McpForm(_) => self.open_mcp(),
             Popup::McpSearch(f) if f.sel.is_some() => (f.sel, f.scroll, f.error) = (None, 0.0, None),
             Popup::McpSearch(_) => self.open_mcp(),
+            // De una ficha, o mientras se baja, se vuelve a lo encontrado.
+            Popup::Skill(f) if f.hits.is_some() && (f.bundle.is_some() || f.busy) => {
+                (f.bundle, f.sel, f.wanted, f.busy, f.error) = (None, None, None, false, None);
+                f.scroll = 0.0;
+            }
             Popup::Skill(f) if f.sel.is_some() && f.bundle.as_ref().is_some_and(|b| b.found.len() > 1) => {
                 (f.sel, f.scroll) = (None, 0.0);
             }
@@ -737,6 +804,7 @@ impl App {
             ChatHit::McpTrust(i, j) => self.toggle_mcp_tool(i as usize, j as usize, true),
             ChatHit::SkillAdd => self.chats.popup = Popup::Skill(Box::default()),
             ChatHit::SkillFetch => self.fetch_skills(),
+            ChatHit::SkillHit(i) => self.pick_hit(i as usize),
             ChatHit::SkillPick(i) => {
                 if let Popup::Skill(f) = &mut self.chats.popup {
                     (f.sel, f.scroll, f.error) = (Some(i as usize), 0.0, None);

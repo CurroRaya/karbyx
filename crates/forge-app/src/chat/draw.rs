@@ -1730,7 +1730,7 @@ fn memory_panel(ui: &mut Ui, screen: Area, v: &MemoryView, env: &Env) {
     link(ui, "Abrir la carpeta", y, ChatHit::SkillsFolder);
     let b = Area::new(x + w - ui.s(270.0), y - ui.s(3.0), ui.s(130.0), ui.s(22.0));
     let c = if env.hover == Some(ChatHit::SkillAdd) { HOT } else { EMBER };
-    ui.text("Instalar de GitHub…", b.x, b.y + ui.s(4.0), b.w, 11.0, c, true, Align::Right);
+    ui.text("Buscar e instalar…", b.x, b.y + ui.s(4.0), b.w, 11.0, c, true, Align::Right);
     ui.hit(b, Hit::Chat(ChatHit::SkillAdd));
     y += ui.s(24.0);
     let fit = ((bottom - y) / row).max(0.0) as usize;

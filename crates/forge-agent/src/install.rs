@@ -15,7 +15,7 @@ const DOWNLOAD_MAX: u64 = 60 << 20;
 const FILES_MAX: usize = 200;
 const FILE_MAX: u64 = 2 << 20;
 const TOTAL_MAX: u64 = 10 << 20;
-const FOUND_MAX: usize = 100;
+const FOUND_MAX: usize = 1000;
 
 /// De dónde se baja.
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +106,8 @@ pub struct Found {
     pub scripts: usize,
     /// Por qué no se puede instalar, si es el caso.
     pub problem: Option<String>,
+    /// El nombre que declara en su ficha, si no es el de su carpeta.
+    declared: Option<String>,
     dir: PathBuf,
 }
 
@@ -254,6 +256,7 @@ fn inspect(dir: &Path) -> Option<Found> {
     let declared =
         text.lines().find_map(|l| l.strip_prefix("name:")).map(|n| n.trim().trim_matches(['"', '\'']));
     let raw = if raw == "contenido" { declared.unwrap_or("habilidad").to_string() } else { raw };
+    let declared = declared.map(str::to_string);
     let name: String = raw
         .to_lowercase()
         .chars()
@@ -280,7 +283,7 @@ fn inspect(dir: &Path) -> Option<Found> {
             || starts_with_shebang(&dir.join(p))
     };
     let scripts = files.iter().filter(|(p, _)| script(p)).count();
-    Some(Found { name, description, text, files, scripts, problem, dir: dir.to_path_buf() })
+    Some(Found { name, description, text, files, scripts, problem, declared, dir: dir.to_path_buf() })
 }
 
 fn starts_with_shebang(p: &Path) -> bool {
@@ -304,6 +307,20 @@ fn walk(top: &Path, dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u64)>) {
         } else if m.is_file() && rel != Path::new("SKILL.md") {
             out.push((rel.to_path_buf(), m.len()));
         }
+    }
+}
+
+impl Bundle {
+    /// La que se llama así, por su carpeta o por lo que declara.
+    pub fn position(&self, name: &str) -> Option<usize> {
+        let plain = |s: &str| -> String {
+            let s: String =
+                s.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            s.trim_matches('-').to_string()
+        };
+        let want = plain(name);
+        let is = |f: &Found| f.declared.as_deref().is_some_and(|d| plain(d) == want);
+        self.found.iter().position(is).or_else(|| self.found.iter().position(|f| f.name == want))
     }
 }
 
@@ -424,6 +441,11 @@ mod tests {
         assert_eq!(b.found.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["pdf-tools", "vacia"]);
         let f = &b.found[0];
         assert_eq!((f.description.as_str(), f.scripts, f.files.len()), ("Cosas con PDF", 1, 2));
+        // El catálogo usa el nombre declarado; también vale el de la carpeta.
+        assert_eq!(
+            (b.position("pdf"), b.position("PDF Tools"), b.position("nada")),
+            (Some(0), Some(0), None)
+        );
         assert!(b.found[1].problem.is_some() && b.found[1].install(&t.0.join("s"), "x").is_err());
         let skills = t.0.join("mias");
         put(skills.join("pdf-tools/SKILL.md"), "la anterior");
