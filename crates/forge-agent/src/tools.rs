@@ -8,6 +8,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::api::Call;
@@ -51,7 +52,7 @@ pub enum Need {
     Always(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LineKind {
     Same,
     Add,
@@ -60,14 +61,14 @@ pub enum LineKind {
     Gap,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiffLine {
     pub kind: LineKind,
     pub text: String,
 }
 
 /// Lo que se enseña al usuario de una acción.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Detail {
     None,
     Diff { lines: Vec<DiffLine>, added: usize, removed: usize, new: bool },

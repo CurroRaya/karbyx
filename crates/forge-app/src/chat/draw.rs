@@ -4,6 +4,7 @@
 //! Cómo se ve el chat: barra de conversaciones, mensajes, herramientas y
 //! caja de escritura.
 
+use chrono::{DateTime, Local, NaiveDate};
 use forge_agent::tools::{Detail, DiffLine, LineKind};
 
 use super::md::{self, Block, mono, span};
@@ -377,8 +378,8 @@ impl Build<'_> {
             }
         }
         let vx = x + self.d(22.0);
-        let vw = self.label_w(t.verb, 13.0, true);
-        self.label(t.verb, vx, y + self.d(5.0), vw + self.d(4.0), 13.0, DIM, true, Align::Left);
+        let vw = self.label_w(&t.verb, 13.0, true);
+        self.label(t.verb.as_str(), vx, y + self.d(5.0), vw + self.d(4.0), 13.0, DIM, true, Align::Left);
         let right = self.d(170.0);
         let tx = vx + vw + self.d(8.0);
         // Un comando por aprobar ya se ve entero debajo.
@@ -754,45 +755,41 @@ pub fn draw_nav(ui: &mut Ui, a: Area, on: usize, hover: Option<Hit>) {
     }
 }
 
+/// Apartado de la lista según la fecha.
+fn day_group(updated: i64, today: NaiveDate) -> &'static str {
+    let Some(d) = DateTime::from_timestamp(updated, 0) else { return "Antes" };
+    match (today - d.with_timezone(&Local).date_naive()).num_days() {
+        ..=0 => "Hoy",
+        1 => "Ayer",
+        2..=6 => "Esta semana",
+        7..=30 => "Este mes",
+        _ => "Antes",
+    }
+}
+
 /// Barra izquierda: conversaciones y servidor.
-pub fn draw_side(ui: &mut Ui, area: Area, chats: &Chats, env: &Env, hover: Option<Hit>) {
+pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: Option<Hit>) {
     ui.fill(area, SIDE_BG);
-    ui.fill(Area::new(area.right() - 1.0, area.y, 1.0, area.h), LINE);
-    ui.gradient(Area::new(area.x, area.y, area.w - 1.0, ui.s(140.0)), (EMBER, 0.022), (EMBER, 0.0), 0.0);
-    let pad = ui.s(14.0);
-    let (x, w) = (area.x + pad, area.w - 2.0 * pad);
-    let mut y = area.y + ui.s(16.0);
-    let logo = Area::new(x + ui.s(2.0), y, ui.s(22.0), ui.s(22.0));
-    ui.glow(logo, EMBER, 0.32, 6.0, 9.0);
-    ui.gradient(logo, (HOT, 1.0), (EMBER_DEEP, 1.0), 6.0);
-    ui.text("❯", logo.x, logo.y + ui.s(2.5), logo.w, 12.0, ON_EMBER, true, Align::Center);
-    ui.text("forge", logo.right() + ui.s(9.0), y + ui.s(0.5), w, 15.0, TEXT, true, Align::Left);
-    y += ui.s(38.0);
-    draw_nav(ui, Area::new(x, y, w, ui.s(32.0)), 0, hover);
-    y += ui.s(44.0);
-
-    let new = Area::new(x, y, w, ui.s(34.0));
-    let h = env.hover == Some(ChatHit::New);
-    ui.panel(new, if h { ui::ACTIVE_BG } else { CARD }, if h { EMBER } else { LINE }, 9.0, 1.0);
-    ui.text(
-        "＋  Nueva conversación",
-        new.x + ui.s(12.0),
-        new.y + ui.s(8.0),
-        new.w,
-        12.5,
-        TEXT,
-        true,
-        Align::Left,
-    );
-    ui.text("⌘N", new.x, new.y + ui.s(9.0), new.w - ui.s(12.0), 11.0, FAINT, false, Align::Right);
-    ui.hit(new, Hit::Chat(ChatHit::New));
-    y += new.h + ui.s(18.0);
-
-    let foot = area.bottom() - ui.s(72.0);
+    // La lista va primero: lo que sobresale por arriba y por abajo se tapa.
+    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(70.0));
+    let view = Area::new(area.x, list_top, area.w - 1.0, (foot - list_top).max(0.0));
     let row = ui.s(48.0);
-    for (i, c) in chats.list.iter().enumerate().rev().filter(|(_, c)| !c.items.is_empty()) {
-        if y + row > foot {
-            break;
+    let mut y = list_top - chats.side_scroll;
+    let today = Local::now().date_naive();
+    let mut group = "";
+    ui.clip = Some(view);
+    for i in chats.recent() {
+        let c = &chats.list[i];
+        let g = day_group(c.updated, today);
+        if g != group {
+            y += if group.is_empty() { 0.0 } else { ui.s(10.0) };
+            ui.text(g, area.x + ui.s(20.0), y, area.w - ui.s(40.0), 10.5, FAINT, true, Align::Left);
+            y += ui.s(22.0);
+            group = g;
+        }
+        if y + row < view.y || y > view.bottom() {
+            y += row + ui.s(2.0);
+            continue;
         }
         let a = Area::new(area.x + ui.s(8.0), y, area.w - ui.s(16.0), row);
         let del = env.hover == Some(ChatHit::Delete(c.id));
@@ -837,6 +834,41 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &Chats, env: &Env, hover: Optio
         ui.hit(a, Hit::Chat(ChatHit::Open(c.id)));
         y += row + ui.s(2.0);
     }
+    ui.clip = None;
+    chats.side_area = area;
+    chats.side_max = (y + chats.side_scroll - list_top - view.h).max(0.0);
+    chats.side_scroll = chats.side_scroll.min(chats.side_max);
+    ui.fill(Area::new(area.x, area.y, area.w, list_top - area.y), SIDE_BG);
+    ui.fill(Area::new(area.x, foot, area.w, area.bottom() - foot), SIDE_BG);
+    ui.fill(Area::new(area.right() - 1.0, area.y, 1.0, area.h), LINE);
+    ui.gradient(Area::new(area.x, area.y, area.w - 1.0, ui.s(140.0)), (EMBER, 0.022), (EMBER, 0.0), 0.0);
+    let pad = ui.s(14.0);
+    let (x, w) = (area.x + pad, area.w - 2.0 * pad);
+    let mut y = area.y + ui.s(16.0);
+    let logo = Area::new(x + ui.s(2.0), y, ui.s(22.0), ui.s(22.0));
+    ui.glow(logo, EMBER, 0.32, 6.0, 9.0);
+    ui.gradient(logo, (HOT, 1.0), (EMBER_DEEP, 1.0), 6.0);
+    ui.text("❯", logo.x, logo.y + ui.s(2.5), logo.w, 12.0, ON_EMBER, true, Align::Center);
+    ui.text("forge", logo.right() + ui.s(9.0), y + ui.s(0.5), w, 15.0, TEXT, true, Align::Left);
+    y += ui.s(38.0);
+    draw_nav(ui, Area::new(x, y, w, ui.s(32.0)), 0, hover);
+    y += ui.s(44.0);
+
+    let new = Area::new(x, y, w, ui.s(34.0));
+    let h = env.hover == Some(ChatHit::New);
+    ui.panel(new, if h { ui::ACTIVE_BG } else { CARD }, if h { EMBER } else { LINE }, 9.0, 1.0);
+    ui.text(
+        "＋  Nueva conversación",
+        new.x + ui.s(12.0),
+        new.y + ui.s(8.0),
+        new.w,
+        12.5,
+        TEXT,
+        true,
+        Align::Left,
+    );
+    ui.text("⌘N", new.x, new.y + ui.s(9.0), new.w - ui.s(12.0), 11.0, FAINT, false, Align::Right);
+    ui.hit(new, Hit::Chat(ChatHit::New));
 
     // Servidor.
     let a = Area::new(area.x + ui.s(8.0), area.bottom() - ui.s(62.0), area.w - ui.s(16.0), ui.s(52.0));
@@ -878,6 +910,8 @@ pub fn draw_chat(
     chats: &mut Chats,
     env: &Env,
 ) {
+    // La pone la barra lateral, si se ve.
+    chats.side_area = Area::default();
     ui.fill(area, BG);
     let s = ui.s(100.0) / 100.0;
     let z = s * env.zoom;
@@ -899,7 +933,7 @@ pub fn draw_chat(
     c.view_h = view.h;
     c.placed.clear();
 
-    if c.items.is_empty() {
+    if c.blank() {
         welcome(ui, view, x, col_w, c, has_model, no_servers, env);
     } else {
         messages(ui, gfx, out, view, x, col_w, c, s, z, env);
@@ -1441,7 +1475,16 @@ fn menu_row(ui: &mut Ui, a: Area, r: &Row, env: &Env) {
     }
     ui.text(r.icon, a.x + ui.s(12.0), a.y + ui.s(8.0), ui.s(18.0), 12.0, r.color, true, Align::Left);
     let tc = if r.hit.is_some() { TEXT } else { DIM };
-    ui.text(&r.title, a.x + ui.s(34.0), a.y + ui.s(7.0), a.w * 0.62, 13.0, tc, r.on, Align::Left);
+    ui.text(
+        &r.title,
+        a.x + ui.s(34.0),
+        a.y + ui.s(7.0),
+        if r.sub.is_empty() { a.w - ui.s(46.0) } else { a.w * 0.62 },
+        13.0,
+        tc,
+        r.on,
+        Align::Left,
+    );
     ui.text(
         &r.sub,
         a.x + a.w * 0.5,
@@ -1783,6 +1826,14 @@ mod tests {
     fn inline_code_ranges() {
         let s = vec![span("a\nñ ", INK), mono("xy", INK), span(" z", INK)];
         assert_eq!(code_ranges(&s), [((1, 3), (1, 5))]);
+    }
+
+    #[test]
+    fn groups_by_day() {
+        let now = Local::now();
+        let at = |days: i64| (now - chrono::Duration::days(days)).timestamp();
+        let g: Vec<_> = [0, 1, 3, 20, 90].iter().map(|d| day_group(at(*d), now.date_naive())).collect();
+        assert_eq!(g, ["Hoy", "Ayer", "Esta semana", "Este mes", "Antes"]);
     }
 
     #[test]

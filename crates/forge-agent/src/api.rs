@@ -204,7 +204,7 @@ pub enum Delta<'a> {
 }
 
 /// Cifras de una respuesta.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub prompt: u32,
     pub output: u32,

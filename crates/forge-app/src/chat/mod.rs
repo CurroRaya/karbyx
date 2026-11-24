@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use forge_agent::agent::{Agent, Ask, Decision, Event, Setup};
-use forge_agent::api::{self, Model, Server, Stats};
+use forge_agent::api::{self, Model, Msg, Server, Stats};
 use forge_agent::http::Base;
 use forge_agent::tools::{self, Detail};
 use winit::event::KeyEvent;
@@ -24,7 +24,7 @@ use crate::ui::{Area, Hit};
 use crate::{App, PaneKind, Spawn, UserEvent};
 use edit::{Editor, Move};
 use forge_ai::Provider;
-use store::Saved;
+use store::{Saved, Stored, StoredItem};
 
 /// Salida en vivo de un comando que se guarda para enseñar.
 const LIVE_MAX: usize = 24 * 1024;
@@ -95,7 +95,7 @@ pub enum ToolState {
 
 pub struct ToolItem {
     pub id: u64,
-    pub verb: &'static str,
+    pub verb: String,
     pub target: String,
     pub detail: Detail,
     pub state: ToolState,
@@ -148,7 +148,15 @@ pub struct Chat {
     pub id: u64,
     pub title: String,
     pub items: Vec<Item>,
-    agent: Agent,
+    /// Se crea al abrir la conversación.
+    agent: Option<Agent>,
+    /// Dónde se guarda, y último cambio (segundos desde 1970).
+    file: Option<PathBuf>,
+    pub updated: i64,
+    /// Ya se leyó del disco (o es nueva).
+    loaded: bool,
+    /// Lo que ve el modelo, para guardarlo.
+    history: Vec<Msg>,
     pub input: Editor,
     pub phase: Phase,
     pub root: Option<PathBuf>,
@@ -170,6 +178,32 @@ pub struct Chat {
 }
 
 impl Chat {
+    fn empty(id: u64) -> Self {
+        Self {
+            id,
+            title: String::new(),
+            items: Vec::new(),
+            agent: None,
+            file: None,
+            updated: 0,
+            loaded: true,
+            history: Vec::new(),
+            input: Editor::default(),
+            phase: Phase::Idle,
+            root: None,
+            stats: None,
+            queued: None,
+            unseen: false,
+            scroll: 0.0,
+            stick: true,
+            view_h: 0.0,
+            content_h: 0.0,
+            sel: None,
+            placed: Vec::new(),
+            input_at: None,
+        }
+    }
+
     pub fn busy(&self) -> bool {
         self.phase != Phase::Idle
     }
@@ -183,7 +217,101 @@ impl Chat {
     }
 
     pub fn auto(&self) -> bool {
-        self.agent.auto()
+        self.agent.as_ref().is_some_and(Agent::auto)
+    }
+
+    /// Nueva y sin usar.
+    pub fn blank(&self) -> bool {
+        self.loaded && self.items.is_empty()
+    }
+
+    /// Lo que se guarda en disco.
+    fn stored(&self) -> Stored {
+        let ms = |d: Duration| d.as_millis() as u64;
+        let items = self
+            .items
+            .iter()
+            .map(|i| match &i.body {
+                Body::User(t) => StoredItem::User(t.clone()),
+                Body::Assistant(t) => StoredItem::Assistant(t.clone()),
+                Body::Notice(t) => StoredItem::Notice(t.clone()),
+                Body::Error(t) => StoredItem::Error(t.clone()),
+                Body::Think { text, since, took } => {
+                    StoredItem::Think { text: text.clone(), ms: ms(took.unwrap_or_else(|| since.elapsed())) }
+                }
+                Body::Tool(t) => {
+                    let (ok, summary, took) = match &t.state {
+                        ToolState::Done { ok, summary, took } => (*ok, summary.clone(), *took),
+                        _ => (false, "interrumpido".into(), Duration::ZERO),
+                    };
+                    // De las salidas largas basta el final: es solo para verlas.
+                    let mut from = t.output.len().saturating_sub(LIVE_MAX);
+                    while !t.output.is_char_boundary(from) {
+                        from += 1;
+                    }
+                    StoredItem::Tool {
+                        verb: t.verb.clone(),
+                        target: t.target.clone(),
+                        detail: t.detail.clone(),
+                        ok,
+                        summary,
+                        ms: ms(took),
+                        output: t.output[from..].to_string(),
+                    }
+                }
+            })
+            .collect();
+        Stored { busy: self.busy(), stats: self.stats, history: self.history.clone(), items }
+    }
+
+    /// Recupera lo guardado.
+    fn restore(&mut self, s: Stored) {
+        let now = Instant::now();
+        self.items = s
+            .items
+            .into_iter()
+            .map(|i| {
+                Item::new(match i {
+                    StoredItem::User(t) => Body::User(t),
+                    StoredItem::Assistant(t) => Body::Assistant(t),
+                    StoredItem::Notice(t) => Body::Notice(t),
+                    StoredItem::Error(t) => Body::Error(t),
+                    StoredItem::Think { text, ms } => {
+                        Body::Think { text, since: now, took: Some(Duration::from_millis(ms)) }
+                    }
+                    StoredItem::Tool { verb, target, detail, ok, summary, ms, output } => {
+                        let took = Duration::from_millis(ms);
+                        Body::Tool(Box::new(ToolItem {
+                            // Ninguna acción viva lleva este número.
+                            id: 0,
+                            verb,
+                            target,
+                            detail,
+                            state: ToolState::Done { ok, summary, took },
+                            output,
+                            since: now,
+                        }))
+                    }
+                })
+            })
+            .collect();
+        if s.busy {
+            self.items.push(Item::new(Body::Notice("Se quedó a medias al cerrar forge.".into())));
+        }
+        self.stats = s.stats;
+        self.history = s.history;
+    }
+
+    /// Guarda la conversación.
+    fn save(&mut self) -> std::io::Result<()> {
+        if !self.loaded || self.items.is_empty() {
+            return Ok(());
+        }
+        if self.file.is_none() {
+            self.file = store::new_file();
+        }
+        let Some(f) = &self.file else { return Ok(()) };
+        store::store(f, &self.title, self.root.as_deref(), self.updated, &self.stored())
     }
 
     fn tool(&mut self, id: u64) -> Option<&mut ToolItem> {
@@ -252,6 +380,7 @@ impl Chat {
                 self.set_phase(Phase::Tool);
                 let state = ask.map_or(ToolState::Queued, ToolState::Asking);
                 let since = Instant::now();
+                let verb = verb.to_string();
                 let t = ToolItem { id, verb, target, detail, state, output: String::new(), since };
                 self.items.push(Item::new(Body::Tool(Box::new(t))));
             }
@@ -286,6 +415,7 @@ impl Chat {
                 let speed = s.speed.or(self.stats.and_then(|o| o.speed));
                 self.stats = Some(Stats { speed, ..s });
             }
+            Event::History(h) => self.history = h,
             Event::Notice(m) => self.items.push(Item::new(Body::Notice(m))),
             Event::Error(m) => self.items.push(Item::new(Body::Error(m))),
             Event::Done => {
@@ -363,6 +493,12 @@ pub struct Chats {
     pub confirm: Option<u64>,
     /// Aviso breve («Copiado»).
     pub toast: Option<(String, Instant)>,
+    /// Barra lateral: desplazamiento, lo que sobra, y su zona.
+    pub side_scroll: f32,
+    pub side_max: f32,
+    pub side_area: Area,
+    /// Ya se avisó de que no se puede guardar.
+    save_failed: bool,
 }
 
 impl Chats {
@@ -373,16 +509,41 @@ impl Chats {
             .iter()
             .map(|s| ServerView { server: s.clone(), status: Status::Checking, checked: Instant::now() })
             .collect();
+        let mut stored = store::list();
+        stored.sort_by_key(|(_, m)| m.updated);
+        let list: Vec<Chat> = stored
+            .into_iter()
+            .enumerate()
+            .map(|(i, (file, m))| Chat {
+                title: m.title,
+                root: m.root,
+                updated: m.updated,
+                file: Some(file),
+                loaded: false,
+                ..Chat::empty(i as u64 + 1)
+            })
+            .collect();
         Self {
-            list: Vec::new(),
+            next: list.len() as u64 + 1,
+            list,
             cur: 0,
-            next: 1,
             servers,
             saved,
             popup: Popup::None,
             confirm: None,
             toast: None,
+            side_scroll: 0.0,
+            side_max: 0.0,
+            side_area: Area::default(),
+            save_failed: false,
         }
+    }
+
+    /// Conversaciones con algo dentro, la última primero.
+    pub fn recent(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = (0..self.list.len()).filter(|i| !self.list[*i].blank()).collect();
+        v.sort_by_key(|i| std::cmp::Reverse((self.list[*i].updated, self.list[*i].id)));
+        v
     }
 
     pub fn current(&self) -> Option<&Chat> {
@@ -458,7 +619,8 @@ impl App {
             self.dashboard = None;
             self.review = None;
             self.close_search();
-            if self.chats.list.is_empty() {
+            // Al arrancar hay conversaciones guardadas, pero ninguna abierta.
+            if self.chats.current().is_none_or(|c| !c.loaded) {
                 self.new_chat();
             }
             if let Some(c) = self.chats.current_mut() {
@@ -471,35 +633,82 @@ impl App {
 
     pub(super) fn new_chat(&mut self) {
         // Si ya hay una en blanco, esa.
-        if let Some(i) = self.chats.list.iter().position(|c| c.items.is_empty()) {
+        if let Some(i) = self.chats.list.iter().position(Chat::blank) {
             self.chats.cur = i;
             return;
         }
         let id = self.chats.next;
         self.chats.next += 1;
-        let proxy = self.proxy.clone();
-        let agent = Agent::spawn(Vec::new(), move |e| drop(proxy.send_event(UserEvent::Chat(id, e))));
         let root = self.chats.saved.project.clone().filter(|p| p.is_dir());
-        self.chats.list.push(Chat {
-            id,
-            title: String::new(),
-            items: Vec::new(),
-            agent,
-            input: Editor::default(),
-            phase: Phase::Idle,
-            root,
-            stats: None,
-            queued: None,
-            unseen: false,
-            scroll: 0.0,
-            stick: true,
-            view_h: 0.0,
-            content_h: 0.0,
-            sel: None,
-            placed: Vec::new(),
-            input_at: None,
-        });
+        self.chats.list.push(Chat { root, ..Chat::empty(id) });
         self.chats.cur = self.chats.list.len() - 1;
+        self.start_agent(self.chats.cur);
+    }
+
+    /// Pone en marcha el agente de una conversación, desde su historia.
+    fn start_agent(&mut self, i: usize) {
+        let Some(c) = self.chats.list.get_mut(i).filter(|c| c.agent.is_none()) else { return };
+        let (id, proxy) = (c.id, self.proxy.clone());
+        c.agent = Some(Agent::spawn(c.history.clone(), move |e| {
+            drop(proxy.send_event(UserEvent::Chat(id, e)));
+        }));
+    }
+
+    /// Abre una conversación, leyéndola del disco si hace falta.
+    fn open_chat(&mut self, i: usize) {
+        let Some(c) = self.chats.list.get_mut(i) else { return };
+        if !c.loaded {
+            let Some(f) = &c.file else { return };
+            match store::load(f) {
+                Ok(s) => {
+                    c.restore(s);
+                    c.loaded = true;
+                }
+                Err(e) => {
+                    // El archivo no se toca.
+                    log::warn!("{}: {e}", f.display());
+                    return self.toast("No se puede leer esa conversación");
+                }
+            }
+        }
+        c.unseen = false;
+        c.stick = true;
+        self.chats.cur = i;
+        self.start_agent(i);
+    }
+
+    /// Guarda una conversación; si no se puede, se avisa una vez.
+    fn save_chat(&mut self, i: usize) {
+        let Some(c) = self.chats.list.get_mut(i) else { return };
+        match c.save() {
+            Ok(()) => self.chats.save_failed = false,
+            Err(e) => {
+                log::warn!("no se pudo guardar la conversación: {e}");
+                if !std::mem::replace(&mut self.chats.save_failed, true) {
+                    self.toast("No se puede guardar la conversación");
+                }
+            }
+        }
+    }
+
+    /// Al salir: para lo que esté en marcha (con sus comandos) y guarda.
+    pub(super) fn close_chats(&mut self) {
+        for c in &self.chats.list {
+            if let Some(a) = c.agent.as_ref().filter(|a| a.working()) {
+                a.stop();
+            }
+        }
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(1500)
+            && self.chats.list.iter().any(|c| c.agent.as_ref().is_some_and(Agent::working))
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for i in 0..self.chats.list.len() {
+            if self.chats.list[i].busy() {
+                self.save_chat(i);
+            }
+        }
     }
 
     /// Pregunta a los servidores qué tienen, en segundo plano.
@@ -586,6 +795,7 @@ impl App {
             _ => None,
         };
         let done = matches!(e, Event::Done);
+        let save = matches!(e, Event::Done | Event::History(_));
         let c = &mut self.chats.list[i];
         c.on_event(e);
         if seen {
@@ -600,6 +810,9 @@ impl App {
         {
             let title = if c.title.is_empty() { "forge".to_string() } else { c.title.clone() };
             crate::notify(&title, &n);
+        }
+        if save {
+            self.save_chat(i);
         }
         if let Some(q) = queued {
             self.send_to(i, q);
@@ -626,7 +839,9 @@ impl App {
             return;
         };
         let (server, model, ctx) = (server.clone(), model.id.clone(), model.ctx);
+        self.start_agent(i);
         let Some(c) = self.chats.list.get_mut(i) else { return };
+        c.updated = chrono::Utc::now().timestamp();
         if c.title.is_empty() {
             c.title = crate::agents::one_line(&text, 60);
         }
@@ -635,7 +850,9 @@ impl App {
         c.stick = true;
         c.sel = None;
         let root = c.root.clone();
-        c.agent.prompt(text, Setup { server, model, ctx, root: root.clone() });
+        if let Some(a) = &mut c.agent {
+            a.prompt(text, Setup { server, model, ctx, root: root.clone() });
+        }
         if let Some(p) = root {
             self.chats.saved.used_project(p);
             self.chats.saved.save();
@@ -673,7 +890,9 @@ impl App {
         if let Some(t) = c.tool(id) {
             t.state = ToolState::Queued;
         }
-        c.agent.answer(id, d);
+        if let Some(a) = &c.agent {
+            a.answer(id, d);
+        }
     }
 
     fn chat_stop(&mut self) {
@@ -681,7 +900,9 @@ impl App {
         if c.busy() {
             c.phase = Phase::Stopping;
             c.queued = None;
-            c.agent.stop();
+            if let Some(a) = &c.agent {
+                a.stop();
+            }
         }
     }
 
@@ -766,7 +987,7 @@ impl App {
         }
         self.chats.saved.save();
         // Una conversación empezada se queda en su carpeta.
-        if self.chats.current().is_some_and(|c| !c.items.is_empty() && c.root != p) {
+        if self.chats.current().is_some_and(|c| !c.blank() && c.root != p) {
             let draft = self.chats.current_mut().map(|c| c.input.take()).unwrap_or_default();
             self.new_chat();
             if let Some(c) = self.chats.current_mut()
@@ -800,28 +1021,33 @@ impl App {
             ChatHit::Open(id) => {
                 self.chats.popup = Popup::None;
                 if let Some(i) = self.chats.list.iter().position(|c| c.id == id) {
-                    self.chats.cur = i;
-                    self.chats.list[i].unseen = false;
+                    self.open_chat(i);
                 }
             }
             ChatHit::Delete(id) => {
                 if confirm != Some(id) {
                     self.chats.confirm = Some(id);
                 } else if let Some(i) = self.chats.list.iter().position(|c| c.id == id) {
-                    self.chats.list.remove(i);
-                    if self.chats.list.is_empty() {
-                        self.new_chat();
+                    let gone = self.chats.list.remove(i);
+                    if let Some(f) = &gone.file
+                        && let Err(e) = std::fs::remove_file(f)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        log::warn!("no se pudo borrar {}: {e}", f.display());
+                        self.toast("No se ha podido borrar del disco");
                     }
-                    if self.chats.cur > i || self.chats.cur >= self.chats.list.len() {
-                        self.chats.cur = self.chats.cur.saturating_sub(1);
+                    match self.chats.cur.cmp(&i) {
+                        std::cmp::Ordering::Equal => self.new_chat(),
+                        std::cmp::Ordering::Greater => self.chats.cur -= 1,
+                        std::cmp::Ordering::Less => {}
                     }
                 }
             }
             ChatHit::Send => self.chat_submit(),
             ChatHit::Stop => self.chat_stop(),
             ChatHit::Mode => {
-                if let Some(c) = self.chats.current_mut() {
-                    c.agent.set_auto(!c.agent.auto());
+                if let Some(a) = self.chats.current().and_then(|c| c.agent.as_ref()) {
+                    a.set_auto(!a.auto());
                 }
             }
             ChatHit::ModelMenu => {
@@ -1125,6 +1351,16 @@ impl App {
         self.redraw();
     }
 
+    /// Rueda del ratón: la lista o la conversación.
+    pub(super) fn chat_wheel_at(&mut self, (x, y): (f32, f32), px: f32) {
+        let c = &mut self.chats;
+        if c.side_area.contains(x, y) {
+            c.side_scroll = (c.side_scroll - px).clamp(0.0, c.side_max);
+            return self.redraw();
+        }
+        self.chat_wheel(px);
+    }
+
     /// Desplaza la conversación (positivo: hacia arriba).
     pub(super) fn chat_wheel(&mut self, px: f32) {
         let Some(c) = self.chats.current_mut() else { return };
@@ -1246,6 +1482,19 @@ impl App {
                     eprintln!("selección: {:?}", self.chats.current().and_then(Chat::selected_text));
                 }
             }
+            t if t.starts_with("!open ") => {
+                let n: usize = t[6..].parse().unwrap_or(0);
+                if let Some(&i) = self.chats.recent().get(n) {
+                    self.open_chat(i);
+                }
+            }
+            t if t.starts_with("!delete ") => {
+                let n: usize = t[8..].parse().unwrap_or(0);
+                if let Some(id) = self.chats.recent().get(n).map(|i| self.chats.list[*i].id) {
+                    self.chat_click(ChatHit::Delete(id));
+                }
+            }
+            "!side" => self.chats.side_scroll = 520.0,
             "!models" => self.chats.popup = Popup::Models,
             "!projects" => self.chats.popup = Popup::Projects,
             "!form" => self.open_form(None),

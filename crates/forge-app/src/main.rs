@@ -1272,10 +1272,13 @@ impl App {
         }
         if self.chat_visible && self.review.is_none() {
             let scale = self.gfx.as_ref().map_or(1.0, |g| g.scale());
-            self.chat_wheel(match delta {
-                MouseScrollDelta::LineDelta(_, y) => y * 48.0 * scale,
-                MouseScrollDelta::PixelDelta(p) => p.y as f32,
-            });
+            self.chat_wheel_at(
+                self.cursor,
+                match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y * 48.0 * scale,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                },
+            );
             return;
         }
         if self.review.is_some() {
@@ -1856,7 +1859,7 @@ impl App {
             let l = ui::layout(screen.w, screen.h, scale, self.show_left, false);
             chat::draw::draw_chat(&mut ui, &mut overlay, gfx, &mut rich, l.term, &mut self.chats, env);
             if let Some(side) = l.left {
-                chat::draw::draw_side(&mut ui, side, &self.chats, env, self.hover);
+                chat::draw::draw_side(&mut ui, side, &mut self.chats, env, self.hover);
             }
         }
         if let Some(area) = layout.left.filter(|_| board_view.is_none() && !chat_on) {
@@ -2100,6 +2103,7 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(sock) = &self.agent_socket {
             agents::cleanup(sock);
         }
+        self.close_chats();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {

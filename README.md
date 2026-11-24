@@ -164,7 +164,7 @@ Cierra forge antes y vuelve a abrirla después.
 cargo uninstall forge-app forge-usage
 rm -rf ~/Applications/Forge.app                  # si instalaste la app
 rm -rf ~/.config/forge ~/Library/Caches/forge    # configuración y caché (opcional)
-rm -rf ~/Library/Application\ Support/forge      # servidores del chat y sus claves (opcional)
+rm -rf ~/Library/Application\ Support/forge      # conversaciones, servidores y claves (opcional)
 ```
 
 forge no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
@@ -218,6 +218,10 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 - **Mientras trabaja** puedes escribir el siguiente mensaje, que se envía al
   acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y forge
   avisa si una termina o pide permiso y no la estás viendo.
+- **Conversaciones**: se guardan solas a cada paso y siguen ahí al reabrir
+  forge, ordenadas por fecha. Si lo cierras con una a medias, se para y puedes
+  continuarla. Al reabrir, todas vuelven a preguntar antes de cambiar nada. La ×
+  (dos clics) la borra.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
   Cerca del límite, el agente olvida los resultados antiguos de sus
   herramientas.
@@ -246,7 +250,9 @@ herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
   modelo.
 - Los servidores y sus claves se guardan en
   `~/Library/Application Support/forge/chat.json`, que solo tú puedes leer.
-- Las conversaciones **aún no se guardan**: se pierden al cerrar forge.
+- Las **conversaciones** se guardan sin cifrar en
+  `~/Library/Application Support/forge/chat.d`, también solo para ti, con lo que
+  el modelo haya leído de tus archivos. Borrarlas en forge las borra del disco.
 
 ### La mesa (⌘E)
 

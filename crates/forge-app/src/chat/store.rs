@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
-//! Lo que el chat recuerda entre arranques: servidores, modelo elegido y
-//! carpetas recientes. Solo lo puede leer el usuario (hay claves).
+//! Lo que el chat recuerda entre arranques: servidores, modelo elegido,
+//! carpetas recientes y conversaciones. Solo lo puede leer el usuario (hay
+//! claves y trozos de sus archivos).
+//!
+//! Cada conversación es un archivo de dos líneas: la ficha (para la lista, sin
+//! leer el resto) y el contenido.
 
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::io::{BufRead, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
-use forge_agent::api::Server;
+use forge_agent::api::{Msg, Server, Stats};
+use forge_agent::tools::Detail;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -49,10 +54,88 @@ impl Saved {
     }
 }
 
+/// Versión del formato de las conversaciones.
+const VERSION: u32 = 1;
+
+/// Ficha de una conversación.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Meta {
+    pub v: u32,
+    pub title: String,
+    pub root: Option<PathBuf>,
+    /// Último cambio, en segundos desde 1970.
+    pub updated: i64,
+}
+
+/// Contenido de una conversación.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Stored {
+    /// Se guardó mientras trabajaba.
+    pub busy: bool,
+    pub stats: Option<Stats>,
+    /// Lo que ve el modelo.
+    pub history: Vec<Msg>,
+    /// Lo que se ve en pantalla.
+    pub items: Vec<StoredItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StoredItem {
+    User(String),
+    Assistant(String),
+    Think { text: String, ms: u64 },
+    Tool { verb: String, target: String, detail: Detail, ok: bool, summary: String, ms: u64, output: String },
+    Notice(String),
+    Error(String),
+}
+
+/// Carpeta de las conversaciones.
+fn chats_dir() -> Option<PathBuf> {
+    Some(path()?.with_extension("d"))
+}
+
+/// Archivo para una conversación nueva.
+pub fn new_file() -> Option<PathBuf> {
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis();
+    Some(chats_dir()?.join(format!("{ms}-{}.json", std::process::id())))
+}
+
+/// Fichas de las conversaciones guardadas. Lo que no se entiende se salta.
+pub fn list() -> Vec<(PathBuf, Meta)> {
+    chats_dir().map(|d| list_in(&d)).unwrap_or_default()
+}
+
+fn list_in(dir: &Path) -> Vec<(PathBuf, Meta)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter_map(|p| {
+            let mut line = String::new();
+            std::io::BufReader::new(std::fs::File::open(&p).ok()?).read_line(&mut line).ok()?;
+            let meta: Meta = serde_json::from_str(&line).ok().filter(|m: &Meta| m.v == VERSION)?;
+            Some((p, meta))
+        })
+        .collect()
+}
+
+pub fn load(p: &Path) -> Result<Stored, String> {
+    let text = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+    let body = text.split_once('\n').map(|(_, b)| b).ok_or("el archivo está incompleto")?;
+    serde_json::from_str(body).map_err(|e| e.to_string())
+}
+
+pub fn store(p: &Path, title: &str, root: Option<&Path>, updated: i64, body: &Stored) -> std::io::Result<()> {
+    let meta = Meta { v: VERSION, title: title.into(), root: root.map(Path::to_path_buf), updated };
+    write_private(p, &format!("{}\n{}\n", serde_json::to_string(&meta)?, serde_json::to_string(body)?))
+}
+
 /// Escribe de una vez (archivo nuevo y cambio de nombre), solo para el usuario.
-fn write_private(p: &std::path::Path, text: &str) -> std::io::Result<()> {
+fn write_private(p: &Path, text: &str) -> std::io::Result<()> {
     if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d)?;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)?;
     }
     let tmp = p.with_extension("tmp");
     let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
@@ -73,6 +156,51 @@ mod tests {
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"servers\":[]}");
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn conversations() {
+        use forge_agent::tools::{DiffLine, LineKind};
+        let dir = std::env::temp_dir().join(format!("forge-conv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let body = Stored {
+            busy: true,
+            stats: Some(Stats { prompt: 1, output: 2, speed: Some(3.0) }),
+            history: vec![Msg::User("hola\nñ".into())],
+            items: vec![
+                StoredItem::User("hola\nñ".into()),
+                StoredItem::Tool {
+                    verb: "Editar".into(),
+                    target: "a.rs".into(),
+                    detail: Detail::Diff {
+                        lines: vec![DiffLine { kind: LineKind::Add, text: "x".into() }],
+                        added: 1,
+                        removed: 0,
+                        new: false,
+                    },
+                    ok: true,
+                    summary: String::new(),
+                    ms: 5,
+                    output: "Done.".into(),
+                },
+            ],
+        };
+        let p = dir.join("1.json");
+        store(&p, "Un título\ncon salto", Some(Path::new("/x")), 7, &body).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        // Basura, versiones futuras y restos no estorban.
+        std::fs::write(dir.join("2.json"), "{mal").unwrap();
+        std::fs::write(dir.join("3.json"), r#"{"v":99,"title":"","root":null,"updated":1}"#).unwrap();
+        std::fs::write(dir.join("4.tmp"), "").unwrap();
+        let l = list_in(&dir);
+        assert_eq!(l.len(), 1);
+        assert_eq!((l[0].1.title.as_str(), l[0].1.updated), ("Un título\ncon salto", 7));
+        assert_eq!(load(&p).unwrap(), body);
+        // Un archivo a medias es un error, no una conversación vacía.
+        let t = std::fs::read_to_string(&p).unwrap();
+        std::fs::write(&p, &t[..t.len() - 20]).unwrap();
+        assert!(load(&p).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

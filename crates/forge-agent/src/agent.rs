@@ -64,6 +64,9 @@ pub enum Event {
         took: Duration,
     },
     Stats(Stats),
+    /// La conversación tal como la ve el modelo, en un punto desde el que se
+    /// puede continuar. Para guardarla.
+    History(Vec<Msg>),
     Notice(String),
     Error(String),
     /// Fin del turno.
@@ -89,6 +92,7 @@ pub struct Agent {
     stopped: Arc<AtomicU64>,
     turn: u64,
     auto: Arc<AtomicBool>,
+    working: Arc<AtomicBool>,
 }
 
 impl Drop for Agent {
@@ -103,22 +107,25 @@ impl Agent {
         let (orders, rx) = mpsc::channel();
         let stopped = Arc::new(AtomicU64::new(0));
         let auto = Arc::new(AtomicBool::new(false));
+        let working = Arc::new(AtomicBool::new(false));
         let mut w = Worker {
             rx,
             on: Box::new(on),
             history,
             stopped: stopped.clone(),
             auto: auto.clone(),
+            working: working.clone(),
             turn: 0,
             next_id: 1,
             last_prompt: 0,
         };
         let _ = std::thread::Builder::new().name("agente".into()).spawn(move || w.run());
-        Self { orders, stopped, turn: 0, auto }
+        Self { orders, stopped, turn: 0, auto, working }
     }
 
     pub fn prompt(&mut self, text: String, setup: Setup) {
         self.turn += 1;
+        self.working.store(true, Ordering::Release);
         let _ = self.orders.send(Order::Prompt { turn: self.turn, text, setup: Box::new(setup) });
     }
 
@@ -129,6 +136,11 @@ impl Agent {
     /// Para el turno en curso.
     pub fn stop(&self) {
         self.stopped.fetch_max(self.turn, Ordering::Relaxed);
+    }
+
+    /// Sigue con un turno (también mientras se para).
+    pub fn working(&self) -> bool {
+        self.working.load(Ordering::Acquire)
     }
 
     /// Modo automático: edita en el proyecto y ejecuta en el sandbox sin preguntar.
@@ -147,6 +159,7 @@ struct Worker {
     history: Vec<Msg>,
     stopped: Arc<AtomicU64>,
     auto: Arc<AtomicBool>,
+    working: Arc<AtomicBool>,
     turn: u64,
     next_id: u64,
     /// Tokens del último envío, según el servidor.
@@ -164,9 +177,16 @@ impl Worker {
                         e => (self.on)(Event::Error(e.to_string())),
                     }
                 }
+                self.snapshot();
+                self.working.store(false, Ordering::Release);
                 (self.on)(Event::Done);
             }
         }
+    }
+
+    fn snapshot(&self) {
+        let h = self.history.iter().filter(|m| !matches!(m, Msg::System(_))).cloned().collect();
+        (self.on)(Event::History(h));
     }
 
     fn cancelled(&self) -> bool {
@@ -183,7 +203,8 @@ impl Worker {
             Some(m @ Msg::System(_)) => *m = system,
             _ => self.history.insert(0, system),
         }
-        self.history.push(Msg::User(text));
+        add_user(&mut self.history, text);
+        self.snapshot();
         let mut retried = false;
         let mut repeated: (String, usize) = Default::default();
         for step in 0.. {
@@ -282,6 +303,7 @@ impl Worker {
             if stop || self.cancelled() {
                 return Ok(());
             }
+            self.snapshot();
         }
         Ok(())
     }
@@ -402,6 +424,39 @@ impl Worker {
         }
         !old.is_empty()
     }
+}
+
+/// Añade un mensaje del usuario a una conversación que pudo quedar a medias:
+/// hay plantillas que fallan si los turnos no se alternan o si una llamada se
+/// queda sin resultado.
+fn add_user(history: &mut Vec<Msg>, text: String) {
+    if let Some(i) = history.iter().rposition(|m| matches!(m, Msg::Assistant { .. }))
+        && let Msg::Assistant { calls, .. } = &history[i]
+    {
+        let answered =
+            |c: &Call| history[i..].iter().any(|m| matches!(m, Msg::Tool { id, .. } if *id == c.id));
+        let missing: Vec<Call> = calls.iter().filter(|c| !answered(c)).cloned().collect();
+        for c in missing {
+            history.push(Msg::Tool { id: c.id, name: c.name, text: "Not run: interrupted.".into() });
+        }
+    }
+    match history.last_mut() {
+        // Un mensaje que no llegó a contestarse.
+        Some(Msg::User(prev)) => {
+            if *prev != text {
+                prev.push_str("\n\n");
+                prev.push_str(&text);
+            }
+            return;
+        }
+        Some(Msg::Tool { .. }) => history.push(Msg::Assistant {
+            text: "(Interrupted.)".into(),
+            reasoning: String::new(),
+            calls: vec![],
+        }),
+        _ => {}
+    }
+    history.push(Msg::User(text));
 }
 
 fn system_prompt(ctx: Option<&Ctx>) -> String {
@@ -586,6 +641,54 @@ mod tests {
         let ev = r.finish(Decision::Allow);
         assert!(t.elapsed() < Duration::from_secs(2));
         assert!(!ev.iter().any(|e| matches!(e, Event::Error(_))));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn interrupted_conversations_can_go_on() {
+        let call = |id: &str| Call { id: id.into(), name: "read".into(), args: "{}".into() };
+        let mut h = vec![
+            Msg::User("a".into()),
+            Msg::Assistant { text: "".into(), reasoning: "".into(), calls: vec![call("1"), call("2")] },
+            Msg::Tool { id: "1".into(), name: "read".into(), text: "x".into() },
+        ];
+        add_user(&mut h, "b".into());
+        assert!(matches!(&h[3], Msg::Tool { id, .. } if id == "2"));
+        assert!(matches!(&h[4], Msg::Assistant { calls, .. } if calls.is_empty()));
+        assert_eq!(h[5], Msg::User("b".into()));
+        // Dos seguidos sin respuesta: un solo mensaje.
+        add_user(&mut h, "b".into());
+        add_user(&mut h, "c".into());
+        assert_eq!((h.len(), h.last()), (6, Some(&Msg::User("b\n\nc".into()))));
+    }
+
+    #[test]
+    fn history_is_handed_over_and_resumed() {
+        let dir = project("seguir");
+        let (server, got) =
+            serve(vec![tool("read", serde_json::json!({"path": "a.txt"})), say("Uno."), say("Dos.")]);
+        let mut r = Run::new();
+        r.send(&server, &dir);
+        let ev = r.finish(Decision::Allow);
+        let h = ev.iter().rev().find_map(|e| match e {
+            Event::History(h) => Some(h.clone()),
+            _ => None,
+        });
+        let h = h.unwrap();
+        assert_eq!(h.len(), 4, "usuario, llamada, resultado y respuesta; sin el sistema");
+        assert!(!r.agent.working());
+        // Otro agente, p. ej. tras reabrir forge, continúa desde ahí.
+        let text = serde_json::to_string(&h).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let agent = Agent::spawn(serde_json::from_str(&text).unwrap(), move |e| drop(tx.send(e)));
+        let mut r = Run { agent, rx };
+        r.send(&server, &dir);
+        r.finish(Decision::Allow);
+        let sent = got.lock().unwrap()[2].clone();
+        assert!(
+            sent.contains("Uno.") && sent.contains(r"1\tuno") && sent.contains(r#""role":"system""#),
+            "{sent}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
