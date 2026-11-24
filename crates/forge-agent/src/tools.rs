@@ -530,7 +530,7 @@ fn cut_chars(s: &str, max: usize) -> &str {
 }
 
 /// Principio y final de un texto largo.
-fn middle_out(s: &str, max: usize) -> String {
+pub(crate) fn middle_out(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }

@@ -1006,6 +1006,8 @@ impl App {
             }
             Hit::ReviewFile(_) | Hit::ReviewMerge | Hit::ReviewDiscard => self.review_click(hit, event_loop),
             Hit::ReviewBox => {}
+            Hit::BoardChat(id) => self.go_to_chat(id),
+            Hit::BoardChatAnswer(id, tool, yes) => self.answer_chat(id, tool, yes),
             Hit::BoardCard(_)
             | Hit::BoardShell(_)
             | Hit::BoardReview(_)

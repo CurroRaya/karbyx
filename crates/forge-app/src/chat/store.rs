@@ -86,6 +86,7 @@ pub enum StoredItem {
     Assistant(String),
     Think { text: String, ms: u64 },
     Tool { verb: String, target: String, detail: Detail, ok: bool, summary: String, ms: u64, output: String },
+    Summary { text: String, before: u32, after: u32 },
     Notice(String),
     Error(String),
 }

@@ -20,7 +20,8 @@ por la GPU, y está en español.
 | **Mesa** (⌘E) | Para dirigir a la vez a Claude Code, Codex CLI y Gemini CLI, cada uno en su propia copia del proyecto. |
 | **Terminal** | Una terminal GPU completa, con paneles, bloques de comandos y el consumo de tus asistentes. |
 
-De momento tu modelo local trabaja en el chat, no en la mesa.
+Las conversaciones del chat se ven también en la mesa, pero de momento las tareas
+que se lanzan desde ella son para Claude, Codex o Gemini, no para tu modelo local.
 
 forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
@@ -180,7 +181,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
 | «El servidor pide una clave» | La clave de forge no es la de `--api-key`. Menú de modelos › *Editar*. |
 | El modelo contesta, pero no usa las herramientas | Elige una carpeta; si ya la tienes, ese modelo o su plantilla no las admiten. |
-| Olvida cosas en tareas largas | El contexto se llena: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
+| Olvida detalles en tareas largas | El contexto se llena y se resume: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
 | `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
@@ -223,8 +224,10 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
   continuarla. Al reabrir, todas vuelven a preguntar antes de cambiar nada. La ×
   (dos clics) la borra.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
-  Cerca del límite, el agente olvida los resultados antiguos de sus
-  herramientas.
+  Al llegar a tres cuartos, el modelo **resume** lo antiguo y sigue, conservando
+  tal cual lo último y tu petición; el resumen se puede ver en la conversación.
+  Se puede pedir antes pulsando ahí (*Resumir ahora*). Si el modelo no consigue
+  resumir, se olvidan los resultados antiguos de sus herramientas.
 
 | Herramienta | Qué hace | Permiso |
 |---|---|---|
@@ -298,6 +301,9 @@ y lo terminado se enfría a acero.
     Con red, un test podría enviar fuera lo que puede leer.
   - Los proyectos activados están en `~/Library/Caches/forge/verify-projects.txt`,
     uno por línea: borra la línea para desactivarlo.
+- **Conversaciones del chat**: las abiertas y las de hoy salen en las mismas
+  columnas. Se puede permitir o negar un cambio desde la tarjeta; los comandos y
+  lo que se pregunta siempre se deciden viéndolos en el chat.
 - Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
   (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
 - **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan

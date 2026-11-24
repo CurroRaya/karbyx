@@ -56,6 +56,8 @@ pub enum ChatHit {
     /// Copiar el código del trozo (elemento, trozo) o la respuesta entera.
     CopyCode(u16, u16),
     CopyAnswer(u16),
+    /// Resumir la conversación ahora.
+    Compact,
     CopyCommand(u8),
     Suggest(u8),
     Bottom,
@@ -107,8 +109,18 @@ pub struct ToolItem {
 pub enum Body {
     User(String),
     Assistant(String),
-    Think { text: String, since: Instant, took: Option<Duration> },
+    Think {
+        text: String,
+        since: Instant,
+        took: Option<Duration>,
+    },
     Tool(Box<ToolItem>),
+    /// Lo anterior se resumió (tokens antes y después).
+    Summary {
+        text: String,
+        before: u32,
+        after: u32,
+    },
     Notice(String),
     Error(String),
 }
@@ -136,6 +148,8 @@ pub enum Phase {
     Writing,
     /// Escribiendo una llamada a herramienta.
     Preparing(String, usize),
+    /// Resumiendo la conversación.
+    Compacting(Instant),
     /// Ejecutando o esperando permiso.
     Tool,
     Stopping,
@@ -234,6 +248,9 @@ impl Chat {
             .map(|i| match &i.body {
                 Body::User(t) => StoredItem::User(t.clone()),
                 Body::Assistant(t) => StoredItem::Assistant(t.clone()),
+                Body::Summary { text, before, after } => {
+                    StoredItem::Summary { text: text.clone(), before: *before, after: *after }
+                }
                 Body::Notice(t) => StoredItem::Notice(t.clone()),
                 Body::Error(t) => StoredItem::Error(t.clone()),
                 Body::Think { text, since, took } => {
@@ -274,6 +291,7 @@ impl Chat {
                 Item::new(match i {
                     StoredItem::User(t) => Body::User(t),
                     StoredItem::Assistant(t) => Body::Assistant(t),
+                    StoredItem::Summary { text, before, after } => Body::Summary { text, before, after },
                     StoredItem::Notice(t) => Body::Notice(t),
                     StoredItem::Error(t) => Body::Error(t),
                     StoredItem::Think { text, ms } => {
@@ -415,6 +433,16 @@ impl Chat {
                 let speed = s.speed.or(self.stats.and_then(|o| o.speed));
                 self.stats = Some(Stats { speed, ..s });
             }
+            Event::Compacting => {
+                self.end_thinking();
+                self.set_phase(Phase::Compacting(Instant::now()));
+            }
+            Event::Compacted { summary, before, after } => {
+                self.items.push(Item::new(Body::Summary { text: summary, before, after }));
+                if let Some(s) = &mut self.stats {
+                    (s.prompt, s.output) = (after, 0);
+                }
+            }
             Event::History(h) => self.history = h,
             Event::Notice(m) => self.items.push(Item::new(Body::Notice(m))),
             Event::Error(m) => self.items.push(Item::new(Body::Error(m))),
@@ -457,6 +485,23 @@ impl Chat {
         }
         (!out.trim().is_empty()).then_some(out)
     }
+}
+
+/// Una conversación tal como se ve en la mesa.
+pub struct ChatCard {
+    pub id: u64,
+    pub title: String,
+    pub project: String,
+    pub detail: String,
+    /// Última línea de la respuesta.
+    pub last: String,
+    /// Acción que espera permiso, y por qué no se decide desde la mesa.
+    pub ask: Option<u64>,
+    pub warn: Option<String>,
+    pub busy: bool,
+    pub unseen: bool,
+    pub used: Option<u32>,
+    pub since: i64,
 }
 
 /// Menú o formulario abierto sobre el chat.
@@ -859,6 +904,91 @@ impl App {
         }
     }
 
+    /// Resume la conversación actual.
+    fn compact_chat(&mut self) {
+        let Some((server, model)) = self.chats.model() else { return };
+        let (server, model, ctx) = (server.clone(), model.id.clone(), model.ctx);
+        let Some(c) = self.chats.current_mut().filter(|c| !c.busy() && !c.items.is_empty()) else { return };
+        let root = c.root.clone();
+        if let Some(a) = &mut c.agent {
+            a.compact(Setup { server, model, ctx, root });
+            c.phase = Phase::Compacting(Instant::now());
+            c.stick = true;
+        }
+    }
+
+    /// Abre el chat en una conversación (desde la mesa).
+    pub(super) fn go_to_chat(&mut self, id: u64) {
+        let Some(i) = self.chats.list.iter().position(|c| c.id == id) else { return };
+        self.open_chat(i);
+        self.show_chat(true);
+    }
+
+    /// Contesta a un permiso desde la mesa.
+    pub(super) fn answer_chat(&mut self, id: u64, tool: u64, yes: bool) {
+        let Some(i) = self.chats.list.iter().position(|c| c.id == id) else { return };
+        self.answer_in(i, tool, if yes { Decision::Allow } else { Decision::Deny(String::new()) });
+    }
+
+    /// Conversaciones para la mesa: las abiertas y las de hoy.
+    pub(super) fn chat_cards(&self) -> Vec<ChatCard> {
+        let order = self.chats.recent();
+        let today = chrono::Local::now().date_naive().and_time(chrono::NaiveTime::MIN);
+        let today = today.and_local_timezone(chrono::Local).earliest().map_or(0, |d| d.timestamp());
+        order
+            .into_iter()
+            .map(|i| &self.chats.list[i])
+            .filter(|c| c.agent.is_some() || c.updated >= today)
+            .take(12)
+            .map(|c| {
+                let ask = c.asking();
+                let last = c.items.iter().rev().find_map(|i| match &i.body {
+                    Body::Assistant(t) => t.lines().map(str::trim).rfind(|l| !l.is_empty()),
+                    _ => None,
+                });
+                let detail = match (ask, &c.phase) {
+                    (Some(t), _) => match &t.detail {
+                        Detail::Diff { added, removed, .. } => {
+                            format!("{} {}  +{added} −{removed}", t.verb, t.target)
+                        }
+                        _ => format!("{} {}", t.verb, t.target),
+                    },
+                    (_, Phase::Idle) => "Te toca".into(),
+                    (_, Phase::Reading(_)) => "Leyendo la conversación".into(),
+                    (_, Phase::Compacting(_)) => "Resumiendo la conversación".into(),
+                    (_, Phase::Stopping) => "Parando…".into(),
+                    _ => match c.items.last().map(|i| &i.body) {
+                        Some(Body::Think { .. }) => "Pensando".into(),
+                        Some(Body::Tool(t)) if !matches!(t.state, ToolState::Done { .. }) => {
+                            format!("{} {}", t.verb, t.target)
+                        }
+                        _ => "Escribiendo".into(),
+                    },
+                };
+                ChatCard {
+                    id: c.id,
+                    title: c.title.clone(),
+                    project: c.root.as_deref().map_or_else(|| "sin carpeta".into(), folder_name),
+                    detail,
+                    last: last.unwrap_or_default().trim_start_matches(['#', '-', '*', '>', ' ']).to_string(),
+                    ask: ask.map(|t| t.id),
+                    warn: ask.and_then(|t| match &t.state {
+                        ToolState::Asking(a) if a.reason.is_some() => a.reason.clone(),
+                        // Un comando no se aprueba sin verlo entero.
+                        _ if matches!(t.detail, Detail::Command { .. }) => {
+                            Some("mira el comando antes de permitirlo".into())
+                        }
+                        _ => None,
+                    }),
+                    busy: c.busy(),
+                    unseen: c.unseen,
+                    used: c.stats.map(|s| s.prompt + s.output),
+                    since: c.updated,
+                }
+            })
+            .collect()
+    }
+
     /// ↵: envía, contesta a un permiso con un motivo, o deja en cola.
     fn chat_submit(&mut self) {
         let i = self.chats.cur;
@@ -882,7 +1012,11 @@ impl App {
     }
 
     fn chat_answer(&mut self, id: u64, d: Decision) {
-        let Some(c) = self.chats.current_mut() else { return };
+        self.answer_in(self.chats.cur, id, d);
+    }
+
+    fn answer_in(&mut self, chat: usize, id: u64, d: Decision) {
+        let Some(c) = self.chats.list.get_mut(chat) else { return };
         // Solo si sigue pendiente (un doble clic no contesta a lo siguiente).
         if c.asking().is_none_or(|t| t.id != id) {
             return;
@@ -1124,6 +1258,7 @@ impl App {
                     self.set_clipboard(t, "Respuesta copiada");
                 }
             }
+            ChatHit::Compact => self.compact_chat(),
             ChatHit::CopyCommand(w) => {
                 if let Popup::Form(f) = &mut self.chats.popup {
                     // La clave sugerida se usa también para conectar.
@@ -1494,6 +1629,8 @@ impl App {
                     self.chat_click(ChatHit::Delete(id));
                 }
             }
+            "!compact" => self.compact_chat(),
+            "!board" => self.show_board(true),
             "!side" => self.chats.side_scroll = 520.0,
             "!models" => self.chats.popup = Popup::Models,
             "!projects" => self.chats.popup = Popup::Projects,

@@ -284,6 +284,8 @@ pub struct Chat<'a> {
     pub messages: &'a [Msg],
     /// Definiciones de herramientas (lista vacía: ninguna).
     pub tools: &'a [Value],
+    /// Tokens máximos de la respuesta (`None`: los que quepan).
+    pub max_tokens: Option<u32>,
 }
 
 /// Pide la siguiente respuesta; `on` recibe lo que va llegando.
@@ -297,6 +299,9 @@ pub fn chat(c: &Chat, cancelled: &dyn Fn() -> bool, on: &mut dyn FnMut(Delta)) -
     });
     if !c.tools.is_empty() {
         body["tools"] = json!(c.tools);
+    }
+    if let Some(n) = c.max_tokens {
+        body["max_tokens"] = json!(n);
     }
     let body = body.to_string();
     let req = Request {

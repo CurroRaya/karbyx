@@ -692,6 +692,30 @@ fn build(gfx: &mut Gfx, s: f32, z: f32, w: f32, i: usize, item: &Item) -> Cached
             }
         }
         Body::Tool(t) => b.tool(i, t, item.open),
+        Body::Summary { text, before, after } => {
+            let mark = if item.open { "▾" } else { "▸" };
+            let (b4, af) = (ui::tok(*before as u64), ui::tok(*after as u64));
+            let h = b.d(34.0);
+            let panel =
+                b.push(Area::new(0.0, 0.0, w, h), What::Panel { bg: CARD, border: LINE, radius: 10.0 });
+            let (px, ty) = (b.d(14.0), b.d(8.0));
+            b.label(format!("{mark} Conversación resumida"), px, ty, w, 12.5, DIM, true, Align::Left);
+            b.label(format!("{b4} → ≈{af}"), 0.0, ty, w - px, 11.5, FAINT, false, Align::Right);
+            b.push(Area::new(0.0, 0.0, w, h), What::Hit(ChatHit::Toggle(i as u16)));
+            b.y = h;
+            if item.open {
+                // El resumen, con sangría, dentro de la tarjeta.
+                let from = b.pieces.len();
+                b.w = w - 2.0 * px;
+                b.markdown(i, text);
+                b.w = w;
+                for p in &mut b.pieces[from..] {
+                    p.a.x += px;
+                }
+                b.y += px;
+            }
+            b.pieces[panel].a.h = b.y;
+        }
         Body::Notice(t) => {
             let rich = b.rich(vec![span(t.clone(), FAINT)], 12.5, 1.45);
             b.text(rich, 0.0, w, true);
@@ -1003,8 +1027,10 @@ fn messages(
     let oy = view.y - c.scroll;
     ui.clip = Some(view);
     let sel = c.sel.map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
+    // Debajo va el botón de copiar, si es lo último.
+    let last = c.items.len().saturating_sub(1);
     let last_answer =
-        (!c.busy()).then(|| c.items.iter().rposition(|i| matches!(i.body, Body::Assistant(_)))).flatten();
+        (!c.busy() && c.items.last().is_some_and(|i| matches!(i.body, Body::Assistant(_)))).then_some(last);
     for (i, it) in c.items.iter().enumerate() {
         let Some(k) = &it.cache else { continue };
         let iy = oy + ys[i];
@@ -1078,6 +1104,7 @@ fn live_text(c: &Chat) -> Option<(String, Option<std::time::Instant>)> {
             let size = if *n > 400 { format!(" · {:.1} kB", *n as f32 / 1000.0) } else { String::new() };
             Some((format!("{what}{size}"), None))
         }
+        Phase::Compacting(t) => Some(("Resumiendo la conversación para hacer sitio".into(), Some(*t))),
         Phase::Tool => None,
         Phase::Stopping => Some(("Parando…".into(), None)),
     }
@@ -1349,7 +1376,15 @@ fn composer(
         }
         let w = b.x - ui.s(40.0) - x;
         if w > ui.s(110.0) {
-            ui.text(t, x, by + ui.s(7.0), w, 11.0, FAINT, false, Align::Right);
+            // Al pasar el ratón ofrece resumir.
+            let hov = env.hover == Some(ChatHit::Compact) && !c.busy();
+            let (t, color) = if hov { ("Resumir ahora".to_string(), EMBER) } else { (t, FAINT) };
+            ui.text(t, x, by + ui.s(7.0), w, 11.0, color, false, Align::Right);
+            let zone =
+                Area::new(b.x - ui.s(190.0).min(w + ui.s(40.0)), by, ui.s(186.0).min(w + ui.s(36.0)), bh);
+            if !c.busy() {
+                ui.hit(zone, Hit::Chat(ChatHit::Compact));
+            }
             if let Some(ctx) = model.as_ref().and_then(|m| m.1) {
                 let ring = Area::new(b.x - ui.s(34.0), by + ui.s(13.0), ui.s(24.0), ui.s(4.0));
                 let f = (used as f32 / ctx as f32).clamp(0.03, 1.0);

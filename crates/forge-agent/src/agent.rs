@@ -10,6 +10,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::api::{self, ApiError, Call, Chat, Delta, Msg, Server, Stats};
+use crate::compact;
 use crate::tools::{self, Action, Ctx, Detail, Need, Outcome};
 
 /// Pasos máximos (llamadas al modelo) por mensaje del usuario.
@@ -64,6 +65,13 @@ pub enum Event {
         took: Duration,
     },
     Stats(Stats),
+    /// Está resumiendo lo antiguo, y ya lo hizo (tokens antes y después).
+    Compacting,
+    Compacted {
+        summary: String,
+        before: u32,
+        after: u32,
+    },
     /// La conversación tal como la ve el modelo, en un punto desde el que se
     /// puede continuar. Para guardarla.
     History(Vec<Msg>),
@@ -83,6 +91,7 @@ pub struct Ask {
 enum Order {
     Prompt { turn: u64, text: String, setup: Box<Setup> },
     Answer(u64, Decision),
+    Compact { turn: u64, setup: Box<Setup> },
 }
 
 /// El agente de una conversación. Al soltarlo, se para.
@@ -118,6 +127,8 @@ impl Agent {
             turn: 0,
             next_id: 1,
             last_prompt: 0,
+            last_chars: 0,
+            learned: None,
         };
         let _ = std::thread::Builder::new().name("agente".into()).spawn(move || w.run());
         Self { orders, stopped, turn: 0, auto, working }
@@ -127,6 +138,13 @@ impl Agent {
         self.turn += 1;
         self.working.store(true, Ordering::Release);
         let _ = self.orders.send(Order::Prompt { turn: self.turn, text, setup: Box::new(setup) });
+    }
+
+    /// Resume la conversación ahora.
+    pub fn compact(&mut self, setup: Setup) {
+        self.turn += 1;
+        self.working.store(true, Ordering::Release);
+        let _ = self.orders.send(Order::Compact { turn: self.turn, setup: Box::new(setup) });
     }
 
     pub fn answer(&self, id: u64, d: Decision) {
@@ -164,24 +182,47 @@ struct Worker {
     next_id: u64,
     /// Tokens del último envío, según el servidor.
     last_prompt: u32,
+    /// Caracteres de la conversación entonces.
+    last_chars: usize,
+    /// Contexto real, si el servidor rechazó la conversación por larga.
+    learned: Option<usize>,
 }
 
 impl Worker {
     fn run(&mut self) {
         while let Ok(order) = self.rx.recv() {
-            if let Order::Prompt { turn, text, setup } = order {
-                self.turn = turn;
-                if let Err(e) = self.work(text, &setup) {
-                    match e {
-                        ApiError::Cancelled => {}
-                        e => (self.on)(Event::Error(e.to_string())),
-                    }
+            let result = match order {
+                Order::Prompt { turn, text, setup } => {
+                    self.turn = turn;
+                    self.work(text, &setup)
                 }
-                self.snapshot();
-                self.working.store(false, Ordering::Release);
-                (self.on)(Event::Done);
+                Order::Compact { turn, setup } => {
+                    self.turn = turn;
+                    self.compact_now(&setup)
+                }
+                Order::Answer(..) => continue,
+            };
+            match result {
+                Ok(()) | Err(ApiError::Cancelled) => {}
+                Err(e) => (self.on)(Event::Error(e.to_string())),
             }
+            self.snapshot();
+            self.working.store(false, Ordering::Release);
+            (self.on)(Event::Done);
         }
+    }
+
+    /// Resumen pedido por el usuario: conserva solo lo último.
+    fn compact_now(&mut self, setup: &Setup) -> Result<(), ApiError> {
+        let keep = (self.limit(setup) * compact::CHARS_PER_TOKEN / 10).min(1_200);
+        // Tras recuperarla del disco falta el mensaje del sistema.
+        if !matches!(self.history.first(), Some(Msg::System(_))) {
+            self.history.insert(0, Msg::System(String::new()));
+        }
+        if !self.compact(setup, keep)? {
+            (self.on)(Event::Notice("Aún no hay nada que resumir.".into()));
+        }
+        Ok(())
     }
 
     fn snapshot(&self) {
@@ -214,7 +255,7 @@ impl Worker {
                 )));
                 return Ok(());
             }
-            self.fit(setup, false);
+            self.fit(setup, false)?;
             (self.on)(Event::Thinking);
             let reply = {
                 let on = &self.on;
@@ -226,6 +267,7 @@ impl Worker {
                         model: &setup.model,
                         messages: &self.history,
                         tools: &defs,
+                        max_tokens: None,
                     },
                     &|| stopped.load(Ordering::Relaxed) >= turn,
                     &mut |d| match d {
@@ -243,8 +285,10 @@ impl Worker {
                 match r {
                     Ok(r) => r,
                     Err(ApiError::TooLong(m)) => {
-                        // Una vez se intenta de nuevo con lo viejo recortado.
-                        if !retried && self.fit(setup, true) {
+                        // El contexto es menor de lo que se creía: se hace
+                        // sitio y se intenta otra vez.
+                        self.learned = Some(self.used() * 9 / 10);
+                        if !retried && self.fit(setup, true)? {
                             retried = true;
                             continue;
                         }
@@ -268,6 +312,7 @@ impl Worker {
             };
             if let Some(s) = reply.stats {
                 self.last_prompt = s.prompt + s.output;
+                self.last_chars = compact::chars(&self.history) + reply.text.len() + reply.reasoning.len();
                 (self.on)(Event::Stats(s));
             }
             let calls = reply.calls.clone();
@@ -394,16 +439,77 @@ impl Worker {
         }
     }
 
-    /// Si la conversación se acerca al límite, recorta resultados viejos de
-    /// herramientas. Se hace de golpe: cada recorte obliga al servidor a
-    /// releer desde ahí. Devuelve si recortó algo.
-    fn fit(&mut self, setup: &Setup, force: bool) -> bool {
-        let limit = setup.ctx.unwrap_or(32_768) as usize;
-        let chars: usize = self.history.iter().map(Msg::size).sum();
-        let used = (chars / 3).max(self.last_prompt as usize);
-        if !force && used < limit * 3 / 4 {
-            return false;
+    /// Tokens que ocupa la conversación: lo que dijo el servidor la última vez
+    /// más lo añadido desde entonces.
+    fn used(&self) -> usize {
+        let chars = compact::chars(&self.history);
+        match self.last_prompt {
+            0 => chars / compact::CHARS_PER_TOKEN,
+            n => n as usize + chars.saturating_sub(self.last_chars) / compact::CHARS_PER_TOKEN,
         }
+    }
+
+    fn limit(&self, setup: &Setup) -> usize {
+        let ctx = setup.ctx.unwrap_or(32_768) as usize;
+        self.learned.map_or(ctx, |l| l.min(ctx))
+    }
+
+    /// Si la conversación se acerca al límite (o `force`), hace sitio:
+    /// resume lo antiguo o, si no se puede, recorta resultados viejos.
+    /// Devuelve si ha hecho algo.
+    fn fit(&mut self, setup: &Setup, force: bool) -> Result<bool, ApiError> {
+        let limit = self.limit(setup);
+        if !force && self.used() < limit * 3 / 4 {
+            return Ok(false);
+        }
+        // Se conserva tal cual lo último: un cuarto del contexto, o menos si
+        // ya no cabía.
+        let keep = limit * compact::CHARS_PER_TOKEN / if force { 10 } else { 4 };
+        match self.compact(setup, keep) {
+            Ok(true) => Ok(true),
+            Err(ApiError::Cancelled) => Err(ApiError::Cancelled),
+            _ => Ok(self.trim(force)),
+        }
+    }
+
+    /// Resume lo anterior a lo que quepa en `keep` caracteres. `false`: no
+    /// había nada que resumir.
+    fn compact(&mut self, setup: &Setup, keep: usize) -> Result<bool, ApiError> {
+        let Some(cut) = compact::cut(&self.history, keep) else { return Ok(false) };
+        (self.on)(Event::Compacting);
+        let before = self.used();
+        let limit = self.limit(setup);
+        let room = limit * compact::CHARS_PER_TOKEN / 2;
+        let messages =
+            [Msg::System(compact::PROMPT.into()), Msg::User(compact::transcript(&self.history[..cut], room))];
+        // Con margen para los modelos que razonan antes de escribir.
+        let max_tokens = Some((limit / 4).clamp(512, 6_000) as u32);
+        let (stopped, turn) = (&self.stopped, self.turn);
+        let reply = api::chat(
+            &Chat { server: &setup.server, model: &setup.model, messages: &messages, tools: &[], max_tokens },
+            &|| stopped.load(Ordering::Relaxed) >= turn,
+            &mut |_| {},
+        )?;
+        let summary = reply.text.trim().to_string();
+        if summary.is_empty() {
+            return Err(ApiError::Failed("el modelo no ha escrito el resumen".into()));
+        }
+        let new = compact::rebuild(&self.history, cut, &summary);
+        // Un resumen más largo que lo resumido no ayuda.
+        if compact::chars(&new) >= compact::chars(&self.history) {
+            return Err(ApiError::Failed("el resumen no ahorra espacio".into()));
+        }
+        self.history = new;
+        self.last_prompt = 0;
+        let after = self.used();
+        (self.on)(Event::Compacted { summary, before: before as u32, after: after as u32 });
+        self.snapshot();
+        Ok(true)
+    }
+
+    /// Recorta resultados viejos de herramientas, de golpe: cada recorte
+    /// obliga al servidor a releer desde ahí.
+    fn trim(&mut self, force: bool) -> bool {
         let results: Vec<usize> = self
             .history
             .iter()
@@ -660,6 +766,53 @@ mod tests {
         add_user(&mut h, "b".into());
         add_user(&mut h, "c".into());
         assert_eq!((h.len(), h.last()), (6, Some(&Msg::User("b\n\nc".into()))));
+    }
+
+    #[test]
+    fn long_conversations_are_summarized() {
+        let dir = project("resumir");
+        std::fs::write(dir.join("a.txt"), format!("{}\n", "palabra ".repeat(10)).repeat(40)).unwrap();
+        let read = |n: usize| tool("read", serde_json::json!({"path": "a.txt", "limit": 100 + n}));
+        // Con 8192 de contexto: 5 lecturas de ~3200 caracteres caben; luego, resumen.
+        let mut replies: Vec<String> = (0..6).map(read).collect();
+        replies.extend([say("## Resumen\nleí a.txt"), say("Listo.")]);
+        let (server, got) = serve(replies);
+        let mut r = Run::new();
+        r.send(&server, &dir);
+        let ev = r.finish(Decision::Allow);
+        let done = ev.iter().find_map(|e| match e {
+            Event::Compacted { before, after, summary } => Some((*before, *after, summary.clone())),
+            _ => None,
+        });
+        let (before, after, summary) = done.expect("no ha resumido");
+        assert!(after < before / 2, "{before} → {after}");
+        assert!(summary.contains("leí a.txt"));
+        let got = got.lock().unwrap();
+        assert!(
+            got[6].contains("max_tokens") && !got[6].contains(r#""tools""#),
+            "quien resume no usa herramientas"
+        );
+        assert!(got[7].contains("Summary of the conversation") && got[7].contains("haz algo"));
+        assert!(got[7].len() < got[5].len());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn without_summary_it_trims() {
+        let dir = project("recortar");
+        std::fs::write(dir.join("a.txt"), format!("{}\n", "palabra ".repeat(10)).repeat(40)).unwrap();
+        let read = |n: usize| tool("read", serde_json::json!({"path": "a.txt", "limit": 100 + n}));
+        let mut replies: Vec<String> = (0..7).map(read).collect();
+        // El que resume no escribe nada.
+        replies[6] = say("");
+        replies.push(say("Listo."));
+        let (server, _) = serve(replies);
+        let mut r = Run::new();
+        r.send(&server, &dir);
+        let ev = r.finish(Decision::Allow);
+        assert!(!ev.iter().any(|e| matches!(e, Event::Compacted { .. } | Event::Error(_))));
+        assert!(ev.iter().any(|e| matches!(e, Event::Text(t) if t == "Listo.")));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

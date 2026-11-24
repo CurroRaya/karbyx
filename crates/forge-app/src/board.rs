@@ -17,6 +17,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::{App, PaneKind, Spawn, UserEvent, ago, project_root, state_text};
 use crate::agents::AgentState;
+use crate::chat::ChatCard;
 use crate::panes::PaneId;
 use crate::ui::{self, Align, Area, Hit, Rgb, Ui};
 use crate::usage::UsageState;
@@ -277,6 +278,8 @@ pub struct ShellChip {
 /// Todo lo que la mesa necesita para pintarse.
 pub struct BoardView {
     pub columns: [Vec<Card>; 3],
+    /// Conversaciones del chat, en las mismas columnas.
+    pub chats: [Vec<ChatCard>; 3],
     pub done: Vec<DoneItem>,
     pub shells: Vec<ShellChip>,
     pub input: String,
@@ -414,6 +417,17 @@ impl App {
                 });
             }
         }
+        let mut chats: [Vec<ChatCard>; 3] = Default::default();
+        for c in self.chat_cards() {
+            let col = if c.ask.is_some() {
+                1
+            } else if c.busy {
+                0
+            } else {
+                2
+            };
+            chats[col].push(c);
+        }
         let project = self
             .board_project()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -421,6 +435,7 @@ impl App {
         let today_start = Local::now().date_naive();
         BoardView {
             columns,
+            chats,
             done: self
                 .board
                 .done
@@ -955,10 +970,10 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
     let bottom = screen.bottom() - pad - shells_h;
     let gap = ui.s(16.0);
     let cw = (w - 3.0 * gap) / 4.0;
-    let empty = v.columns.iter().all(Vec::is_empty);
+    let empty = v.columns.iter().all(Vec::is_empty) && v.chats.iter().all(Vec::is_empty);
     for (i, title) in COLUMNS.iter().enumerate() {
         let cx = x + i as f32 * (cw + gap);
-        let count = if i < 3 { v.columns[i].len() } else { v.done.len() };
+        let count = if i < 3 { v.columns[i].len() + v.chats[i].len() } else { v.done.len() };
         let color = column_color(i);
         let dot = ui.s(8.0);
         let dot_a = Area::new(cx, y + ui.s(5.0), dot, dot);
@@ -1028,6 +1043,17 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
                 cy += card.h + ui.s(8.0);
             }
             continue;
+        }
+        for (k, c) in v.chats[i].iter().enumerate() {
+            let h = ui.s(if c.ask.is_some() { 138.0 } else { 96.0 });
+            if cy + h > bottom {
+                let more = format!("+{} conversaciones", v.chats[i].len() - k);
+                ui.text(more, cx, cy + ui.s(2.0), cw, 11.0, ui::DIM, false, Align::Left);
+                cy += ui.s(22.0);
+                break;
+            }
+            draw_chat_card(ui, Area::new(cx, cy, cw, h), c, i, tick, hover);
+            cy += h + ui.s(12.0);
         }
         let cards = &v.columns[i];
         let card_h = ui.s(204.0);
@@ -1303,6 +1329,87 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
         ui.round(d, HOT, 1.0, 4.0);
     }
     ui.hit(a, Hit::BoardCard(c.pane));
+}
+
+/// Tarjeta de una conversación con un modelo local.
+fn draw_chat_card(ui: &mut Ui, a: Area, c: &ChatCard, col: usize, tick: u64, hover: Option<Hit>) {
+    let heat = column_color(col);
+    let hovered = hover == Some(Hit::BoardChat(c.id));
+    if col == 1 {
+        ui.glow(a, HOT, 0.16, 10.0, 14.0);
+    }
+    let border = if col == 1 {
+        HOT
+    } else if hovered {
+        [0x4a, 0x3f, 0x36]
+    } else {
+        ui::BORDER
+    };
+    let bw = if col == 1 { ui.s(1.5) } else { 1.0 };
+    ui.panel(a, if hovered { [0x23, 0x1e, 0x1a] } else { CARD_BG }, border, 10.0, bw);
+    ui.gradient(Area::new(a.x, a.y, a.w, ui.s(46.0)), (heat, 0.05), (heat, 0.0), 10.0);
+    let alpha = if col == 0 { pulse(tick) } else { 0.9 };
+    let strip = Area::new(a.x + ui.s(5.0), a.y + ui.s(12.0), ui.s(3.0), a.h - ui.s(24.0));
+    ui.round(strip, heat, alpha, 1.5);
+    let px = ui.s(16.0);
+    let (x, iw) = (a.x + px, a.w - px - ui.s(12.0));
+    let (icon, icolor) = match col {
+        0 => ui::state_icon(Some(AgentState::Working), None, tick),
+        1 => ("●", HOT),
+        _ => ("❯", EMBER),
+    };
+    let tx = x + ui.s(18.0);
+    ui.text(icon, x, a.y + ui.s(10.0), ui.s(16.0), 12.0, icolor, false, Align::Left);
+    ui.text(&c.title, tx, a.y + ui.s(9.0), iw - ui.s(30.0), 13.0, ui::TEXT, true, Align::Left);
+    let place = format!("Chat · {}", c.project);
+    ui.text(place, tx, a.y + ui.s(29.0), iw - ui.s(18.0), 10.5, ui::DIM, false, Align::Left);
+    let dcolor = if col == 1 { HOT } else { ui::TEXT };
+    ui.text(&c.detail, x, a.y + ui.s(50.0), iw, 11.5, dcolor, col == 1, Align::Left);
+    if let Some(tool) = c.ask {
+        let y = a.y + ui.s(72.0);
+        match &c.warn {
+            // Lo peligroso se decide viéndolo entero.
+            Some(w) => {
+                ui.text(format!("⚠ {w}"), x, y, iw, 11.0, HOT, false, Align::Left);
+                let b = Area::new(x, y + ui.s(24.0), iw, ui.s(30.0));
+                let h = hover == Some(Hit::BoardChat(c.id));
+                ui.round(b, EMBER, if h { 0.3 } else { 0.14 }, 8.0);
+                ui.text("Ver y decidir", b.x, b.y + ui.s(6.0), b.w, 11.5, EMBER, true, Align::Center);
+            }
+            None => {
+                let w = (iw - ui.s(12.0)) / 3.0;
+                let buttons = [
+                    ("Permitir", ui::GREEN, Hit::BoardChatAnswer(c.id, tool, true)),
+                    ("Ver", EMBER, Hit::BoardChat(c.id)),
+                    ("No", ui::RED, Hit::BoardChatAnswer(c.id, tool, false)),
+                ];
+                for (k, (t, color, hit)) in buttons.into_iter().enumerate() {
+                    let b = Area::new(x + k as f32 * (w + ui.s(6.0)), y + ui.s(8.0), w, ui.s(34.0));
+                    ui.round(b, color, if hover == Some(hit) { 0.3 } else { 0.14 }, 8.0);
+                    ui.text(t, b.x, b.y + ui.s(8.0), b.w, 11.5, color, true, Align::Center);
+                    ui.hit(b, hit);
+                }
+            }
+        }
+    } else {
+        let mut foot = c.last.clone();
+        if let Some(u) = c.used {
+            let t = format!("{} tok", ui::tok(u as u64));
+            ui.text(t, x, a.y + ui.s(70.0), iw, 10.5, FAINT, false, Align::Right);
+        }
+        if foot.is_empty() {
+            foot = DateTime::from_timestamp(c.since, 0)
+                .map(|d| d.with_timezone(&Local).format("%H:%M").to_string())
+                .unwrap_or_default();
+        }
+        ui.text(foot, x, a.y + ui.s(70.0), iw - ui.s(64.0), 11.0, ui::DIM, false, Align::Left);
+    }
+    if c.unseen {
+        let d = Area::new(a.right() - ui.s(16.0), a.y + ui.s(14.0), ui.s(7.0), ui.s(7.0));
+        ui.glow(d, HOT, 0.5, 4.0, 5.0);
+        ui.round(d, HOT, 1.0, 4.0);
+    }
+    ui.hit(a, Hit::BoardChat(c.id));
 }
 
 /// Botón pequeño de la tarjeta. Devuelve su ancho.

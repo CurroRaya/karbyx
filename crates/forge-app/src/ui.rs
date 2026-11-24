@@ -159,6 +159,9 @@ pub enum Hit {
     BoardFix(u64),
     /// Mesa: activar la verificación automática del proyecto.
     BoardVerifyEnable(u64),
+    /// Mesa: conversación del chat y respuesta a su permiso (chat, acción, sí).
+    BoardChat(u64),
+    BoardChatAnswer(u64, u64, bool),
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
     BoardLaunch,
