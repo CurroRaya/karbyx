@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::api::Call;
 use crate::exec::{self, End};
 use crate::know;
+use crate::mcp;
 use crate::sandbox;
 
 /// Tamaño máximo de un archivo de texto que se lee o edita.
@@ -77,14 +78,26 @@ pub struct DiffLine {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Detail {
     None,
-    Diff { lines: Vec<DiffLine>, added: usize, removed: usize, new: bool },
-    Command { cmd: String, sandboxed: bool },
+    Diff {
+        lines: Vec<DiffLine>,
+        added: usize,
+        removed: usize,
+        new: bool,
+    },
+    Command {
+        cmd: String,
+        sandboxed: bool,
+    },
+    /// Argumentos de una herramienta MCP.
+    Call(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Job {
     /// Memoria y habilidades.
     Know(know::Job),
+    /// Herramienta de un servidor MCP.
+    Mcp(mcp::Job),
     Read {
         path: PathBuf,
         offset: usize,
@@ -135,6 +148,17 @@ impl Action {
         job: know::Job,
     ) -> Self {
         Self { verb, target, detail, need, job: Job::Know(job) }
+    }
+
+    pub(crate) fn mcp(target: String, detail: Detail, need: Need, job: mcp::Job) -> Self {
+        Self { verb: "Usar", target, detail, need, job: Job::Mcp(job) }
+    }
+
+    pub(crate) fn mcp_job(&self) -> Option<&mcp::Job> {
+        match &self.job {
+            Job::Mcp(j) => Some(j),
+            _ => None,
+        }
     }
 
     /// Lo que hace, si es de memoria o habilidades (no necesita carpeta).
@@ -589,6 +613,7 @@ pub fn execute(
 ) -> Outcome {
     match &action.job {
         Job::Know(j) => know::run(j),
+        Job::Mcp(j) => mcp::run(j, ctx.max_chars, cancelled),
         Job::Read { path, offset, limit } => match read_text(path) {
             Err(e) => fail(e, "no se pudo leer"),
             Ok(t) => {

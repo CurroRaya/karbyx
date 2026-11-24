@@ -15,7 +15,7 @@ use std::process::Command;
 const EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Carpetas del HOME que no se pueden leer.
-pub const SECRETS: [&str; 25] = [
+pub const SECRETS: [&str; 26] = [
     ".ssh",
     ".aws",
     ".azure",
@@ -34,6 +34,7 @@ pub const SECRETS: [&str; 25] = [
     ".cargo/credentials.toml",
     ".zsh_history",
     ".bash_history",
+    ".config/forge/mcp.json",
     "Library/Application Support/forge",
     "Library/Keychains",
     "Library/Cookies",

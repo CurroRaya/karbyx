@@ -9,6 +9,8 @@ pub mod api;
 mod compact;
 pub mod exec;
 pub mod http;
+pub mod install;
 pub mod know;
+pub mod mcp;
 pub mod sandbox;
 pub mod tools;

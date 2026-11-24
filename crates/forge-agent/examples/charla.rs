@@ -32,6 +32,7 @@ fn main() {
         root: Some(root.into()),
         copy_of: None,
         know: None,
+        mcp: vec![],
     };
     agent.prompt(task.clone(), setup);
     for e in rx {

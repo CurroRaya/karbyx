@@ -6,7 +6,9 @@
 
 pub mod draw;
 pub mod edit;
+pub mod extend;
 pub mod md;
+pub mod panels;
 pub mod store;
 
 use std::path::{Path, PathBuf};
@@ -28,6 +30,7 @@ use crate::ui::{Area, Hit};
 use crate::worktree::Worktree;
 use crate::{App, PaneKind, Spawn, UserEvent};
 use edit::{Editor, Move};
+use extend::{McpForm, McpPanel, McpView, SkillForm};
 use forge_ai::Provider;
 use store::{Saved, Stored, StoredItem};
 
@@ -71,6 +74,25 @@ pub enum ChatHit {
     SkillsFolder,
     /// Habilidad del menú «/».
     PickSkill(u16),
+    /// Servidores MCP: panel, añadir, traer, estado, herramientas...
+    Mcp,
+    McpAdd,
+    McpAddOk,
+    McpImport,
+    McpState(u16),
+    McpApprove(u16),
+    McpRemove(u16),
+    McpOpen(u16),
+    McpTool(u16, u16),
+    McpTrust(u16, u16),
+    /// Instalar habilidades.
+    SkillAdd,
+    SkillFetch,
+    SkillPick(u16),
+    SkillInstall,
+    ExtendBack,
+    /// Permitir siempre una herramienta MCP.
+    AllowTool(u64),
     /// Revisar los cambios de su copia.
     Review,
     CopyCommand(u8),
@@ -165,6 +187,8 @@ pub enum Phase {
     Preparing(String, usize),
     /// Resumiendo la conversación.
     Compacting(Instant),
+    /// Arrancando un servidor MCP.
+    Starting(String, Instant),
     /// Ejecutando o esperando permiso.
     Tool,
     Stopping,
@@ -256,7 +280,7 @@ impl Chat {
     }
 
     /// Memoria y habilidades de esta conversación.
-    fn know(&self) -> Know {
+    pub fn know(&self) -> Know {
         let project = self.worktree.as_ref().map(|w| w.repo.clone()).or(self.root.clone());
         Know {
             memory: store::memory_dir(),
@@ -481,6 +505,7 @@ impl Chat {
                 let speed = s.speed.or(self.stats.and_then(|o| o.speed));
                 self.stats = Some(Stats { speed, ..s });
             }
+            Event::Starting(n) => self.set_phase(Phase::Starting(n, Instant::now())),
             Event::Compacting => {
                 self.end_thinking();
                 self.set_phase(Phase::Compacting(Instant::now()));
@@ -572,6 +597,9 @@ pub enum Popup {
     Models,
     Projects,
     Memory(Box<MemoryView>),
+    Mcp(Box<McpPanel>),
+    McpForm(Box<McpForm>),
+    Skill(Box<SkillForm>),
     Form(Box<Form>),
 }
 
@@ -616,6 +644,9 @@ pub struct Chats {
     pub skills: Vec<Skill>,
     pub slash_sel: usize,
     pub slash_off: bool,
+    /// Servidores MCP, y por qué no se pudieron leer.
+    pub mcp: Vec<McpView>,
+    pub mcp_error: Option<String>,
     /// Ya se avisó de que no se puede guardar.
     save_failed: bool,
 }
@@ -660,6 +691,8 @@ impl Chats {
             skills: Vec::new(),
             slash_sel: 0,
             slash_off: false,
+            mcp: Vec::new(),
+            mcp_error: None,
             save_failed: false,
         }
     }
@@ -779,6 +812,7 @@ impl App {
     pub(super) fn show_chat(&mut self, on: bool) {
         self.chat_visible = on;
         if on {
+            self.reload_mcp();
             self.board_visible = false;
             self.inbox = None;
             self.dashboard = None;
@@ -936,7 +970,7 @@ impl App {
         self.chats.saved.save();
     }
 
-    fn toast(&mut self, t: impl Into<String>) {
+    pub(super) fn toast(&mut self, t: impl Into<String>) {
         self.chats.toast = Some((t.into(), Instant::now()));
     }
 
@@ -1035,8 +1069,9 @@ impl App {
         let root = c.root.clone();
         if let Some(a) = &mut c.agent {
             let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
+            let mcp = extend::servers_for(&self.chats.mcp, &self.chats.saved.mcp, know.project.as_deref());
             let know = Some(know);
-            a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know });
+            a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know, mcp });
         }
         let (id, copy) = (c.id, c.worktree.is_some());
         if copy {
@@ -1056,7 +1091,7 @@ impl App {
         let root = c.root.clone();
         let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
         if let Some(a) = &mut c.agent {
-            a.compact(Setup { server, model, ctx, root, copy_of, know: None });
+            a.compact(Setup { server, model, ctx, root, copy_of, know: None, mcp: vec![] });
             c.phase = Phase::Compacting(Instant::now());
             c.stick = true;
         }
@@ -1174,6 +1209,7 @@ impl App {
                     (_, Phase::Idle) => "Te toca".into(),
                     (_, Phase::Reading(_)) => "Leyendo la conversación".into(),
                     (_, Phase::Compacting(_)) => "Resumiendo la conversación".into(),
+                    (_, Phase::Starting(n, _)) => format!("Arrancando {n}"),
                     (_, Phase::Stopping) => "Parando…".into(),
                     _ => match c.items.last().map(|i| &i.body) {
                         Some(Body::Think { .. }) => "Pensando".into(),
@@ -1459,6 +1495,16 @@ impl App {
                 self.browse_folder();
             }
             ChatHit::Allow(id) => self.chat_answer(id, Decision::Allow),
+            ChatHit::AllowTool(id) => {
+                let tool = self.chats.current().and_then(|c| c.asking()).and_then(|t| match &t.state {
+                    ToolState::Asking(a) if t.id == id => a.tool.clone(),
+                    _ => None,
+                });
+                if let Some((server, tool)) = tool {
+                    self.trust_tool(&server, &tool);
+                    self.chat_answer(id, Decision::AllowTool);
+                }
+            }
             ChatHit::AllowAll(id) => self.chat_answer(id, Decision::AllowAll),
             ChatHit::Deny(id) => self.chat_answer(id, Decision::Deny(String::new())),
             ChatHit::Toggle(i) => {
@@ -1526,6 +1572,7 @@ impl App {
             ChatHit::FormOk => self.form_submit(),
             ChatHit::FormCancel => self.chats.popup = Popup::None,
             ChatHit::Inside => {}
+            h => self.extend_click(h),
         }
         self.redraw();
     }
@@ -1538,6 +1585,13 @@ impl App {
                 ed.insert(&t.replace(['\n', '\r', '\t'], ""));
                 if f.status != Some(Ok(())) {
                     f.status = None;
+                }
+            }
+            Popup::McpForm(_) => self.mcp_text(t),
+            Popup::Skill(f) => {
+                if f.bundle.is_none() && !f.busy {
+                    f.url.insert(&t.replace(['\n', '\r', '\t'], ""));
+                    f.error = None;
                 }
             }
             _ => {
@@ -1575,7 +1629,7 @@ impl App {
         true
     }
 
-    fn open_memory(&mut self) {
+    pub(super) fn open_memory(&mut self) {
         let Some(c) = self.chats.current() else { return };
         let k = c.know();
         self.chats.popup = Popup::Memory(Box::new(MemoryView {
@@ -1706,6 +1760,8 @@ impl App {
                 self.chats.slash_sel = (self.chats.slash_sel + d) % n;
             }
             NamedKey::Escape if !self.chats.slash().is_empty() => self.chats.slash_off = true,
+            NamedKey::Enter if !cmd && self.extend_enter() => {}
+            NamedKey::Escape if self.extend_back() => {}
             NamedKey::Enter if form => self.form_submit(),
             NamedKey::Enter if cmd => match self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
                 Some(id) => self.chat_answer(id, Decision::Allow),
@@ -1742,6 +1798,7 @@ impl App {
                     e.delete(m);
                 }
                 self.slash_changed();
+                self.mcp_parse();
             }
             NamedKey::ArrowLeft | NamedKey::ArrowRight => {
                 let m = step(*named == NamedKey::ArrowLeft);
@@ -1767,13 +1824,15 @@ impl App {
     fn chat_editor(&mut self) -> Option<&mut Editor> {
         match &mut self.chats.popup {
             Popup::Form(f) => Some(if f.focus == 0 { &mut f.url } else { &mut f.key }),
+            Popup::McpForm(f) => Some(&mut f.text),
+            Popup::Skill(f) => Some(&mut f.url),
             _ => self.chats.list.get_mut(self.chats.cur).map(|c| &mut c.input),
         }
     }
 
     fn chat_vertical(&mut self, up: bool, cmd: bool, shift: bool) {
         let to_end = if up { Move::Start } else { Move::End };
-        if cmd || matches!(self.chats.popup, Popup::Form(_)) {
+        if cmd || matches!(self.chats.popup, Popup::Form(_) | Popup::McpForm(_) | Popup::Skill(_)) {
             if let Some(e) = self.chat_editor() {
                 e.go(to_end, shift);
             }
@@ -1811,6 +1870,9 @@ impl App {
 
     /// Rueda del ratón: la lista o la conversación.
     pub(super) fn chat_wheel_at(&mut self, (x, y): (f32, f32), px: f32) {
+        if self.extend_wheel(px) {
+            return;
+        }
         let c = &mut self.chats;
         if c.side_area.contains(x, y) {
             c.side_scroll = (c.side_scroll - px).clamp(0.0, c.side_max);
@@ -1966,6 +2028,19 @@ impl App {
                 }
             }
             "!memory" => self.open_memory(),
+            "!mcp" => self.chat_click(ChatHit::Mcp),
+            "!mcpadd" => self.chat_click(ChatHit::McpAdd),
+            "!mcpok" => self.chat_click(ChatHit::McpAddOk),
+            "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
+            "!skill" => self.chat_click(ChatHit::SkillAdd),
+            "!fetch" => self.chat_click(ChatHit::SkillFetch),
+            "!skillpick" => self.chat_click(ChatHit::SkillPick(0)),
+            "!install" => self.chat_click(ChatHit::SkillInstall),
+            "!allowtool" => {
+                if let Some(id) = self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
+                    self.chat_click(ChatHit::AllowTool(id));
+                }
+            }
             t if t.starts_with("!keys ") => t[6..].chars().for_each(|c| self.chat_text(&c.to_string())),
             "!pick" => {
                 self.slash_pick(0);

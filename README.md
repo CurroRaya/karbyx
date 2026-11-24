@@ -235,6 +235,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | `edit`, `write` | Cambiar una parte de un archivo, o crearlo | Se pregunta, con el diff |
 | `bash` | Ejecutar un comando en la carpeta, dentro del sandbox | Se pregunta |
 | `skill` | Leer una habilidad | Libre |
+| `servidor__herramienta` | Herramientas de tus servidores MCP | Se pregunta siempre, salvo las que digas |
 | `remember`, `forget`, `save_skill` | Cambiar la memoria y las habilidades | Se pregunta siempre |
 
 **Se pregunta siempre**, también en Automático: ejecutar fuera del sandbox,
@@ -265,6 +266,11 @@ cuenta en cada conversación.
   Los pasos, en Markdown.
   ```
 
+  **Instalar de GitHub…** las baja de un repositorio público (`dueño/nombre` o su
+  dirección) o de una carpeta: te enseña el `SKILL.md` entero y qué archivos trae
+  antes de copiarla. Nada se ejecuta al instalar, y los programas pierden el
+  permiso de ejecución.
+
   Las tuyas van en `~/.config/forge/skills/<nombre>/`; las de un proyecto, en
   `.forge/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de
   un proyecto ajeno son instrucciones de otro: léelas antes, sobre todo si vas a
@@ -275,6 +281,26 @@ tareas lanzadas desde la mesa no pueden ni pedirlo. La memoria está sin cifrar 
 `~/Library/Application Support/forge/chat.memoria`, solo para ti. Un cambio de
 memoria se nota en las conversaciones nuevas o reabiertas (borrar una nota, en el
 siguiente mensaje).
+
+#### Servidores MCP
+
+Tu modelo puede usar herramientas de otros programas con
+[MCP](https://modelcontextprotocol.io). En **Servidores MCP › Añadir**, pega el
+JSON de `mcpServers` que dan en su web o la orden con la que se lanza
+(`npx -y paquete`). De momento, solo los que se lanzan en el Mac (*stdio*), no los
+remotos.
+
+- **Es un programa tuyo**: se ejecuta fuera del sandbox y con tus permisos. forge
+  enseña la orden entera antes de arrancarlo y, si luego cambia en el archivo,
+  vuelve a pedir tu aprobación. El `.mcp.json` de un proyecto no se carga solo;
+  *Traer del proyecto* lo enseña para que lo revises.
+- **Cada llamada se pregunta**, también en Automático, enseñando sus datos.
+  *Siempre esta herramienta* deja de preguntar por ella.
+- **Cada herramienta ocupa contexto** (el panel dice cuánto). Actívalos solo en
+  los proyectos que los usan, y apaga las herramientas que sobren.
+
+Se guardan en `~/.config/forge/mcp.json`, que solo tú puedes leer (puede llevar
+claves) y que los comandos del sandbox no ven.
 
 #### Qué protege y qué no
 
@@ -407,7 +433,7 @@ Con **Claude Code** el estado es exacto: forge lo lanza con
 `claude` a mano en una terminal de forge). Tus ajustes de Claude no se tocan.
 Con otros agentes (Codex, Gemini...) se deduce de su actividad.
 
-### Los agentes ven tus terminales (MCP)
+### Los agentes externos ven tus terminales (MCP)
 
 forge es también un servidor [MCP](https://modelcontextprotocol.io): un
 agente que corre dentro de forge puede ver las otras terminales sin que

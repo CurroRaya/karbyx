@@ -228,6 +228,10 @@ enum UserEvent {
     Chat(u64, forge_agent::agent::Event),
     /// Qué modelos tiene un servidor.
     Probe(Box<forge_agent::api::Server>, Result<Vec<forge_agent::api::Model>, String>),
+    /// Herramientas de un servidor MCP.
+    McpProbe(String, Box<forge_agent::mcp::Config>, Result<Vec<forge_agent::mcp::Tool>, String>),
+    /// Habilidades encontradas para instalar.
+    Skills(Box<Result<forge_agent::install::Bundle, String>>),
     /// Carpeta elegida para el chat.
     Folder(PathBuf),
     /// Modo de prueba: mensaje para el chat.
@@ -2125,6 +2129,8 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Verify(pane, generation, r) => self.on_verify(pane, generation, r),
             UserEvent::Chat(id, e) => self.on_chat_event(id, e),
             UserEvent::Probe(server, r) => self.on_probe(*server, r),
+            UserEvent::McpProbe(name, config, r) => self.on_mcp_probe(name, *config, r),
+            UserEvent::Skills(r) => self.on_skills(*r),
             UserEvent::Folder(p) => self.set_chat_project(Some(p)),
             UserEvent::ChatSay(t) if t == "!discard" => self.review_click(Hit::ReviewDiscard, event_loop),
             UserEvent::ChatSay(t) => self.chat_say(t),

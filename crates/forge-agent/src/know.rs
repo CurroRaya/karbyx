@@ -23,7 +23,7 @@ const NOTE_MAX: usize = 300;
 const NOTES_MAX: usize = 80;
 /// Caracteres de memoria que se le cuentan al modelo.
 const MEMORY_MAX: usize = 5_000;
-const SKILL_MAX: u64 = 48 * 1024;
+pub(crate) const SKILL_MAX: u64 = 48 * 1024;
 const SKILLS_MAX: usize = 60;
 
 /// Para que dos conversaciones no se pisen al escribir.
@@ -443,13 +443,10 @@ fn lines(kind: LineKind, text: &str) -> Detail {
     Detail::Diff { lines: vec![DiffLine { kind, text: text.into() }], added, removed, new: false }
 }
 
-/// Resumen estable de una ruta (el de la biblioteca cambia entre versiones).
+/// Resumen estable de una ruta.
 fn fnv(p: &Path) -> u64 {
     use std::os::unix::ffi::OsStrExt;
-    p.as_os_str()
-        .as_bytes()
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
+    crate::exec::fnv(p.as_os_str().as_bytes())
 }
 
 // ---------- habilidades ----------
@@ -485,7 +482,7 @@ fn skills_in(dir: &Path, inside: Option<&Path>, source: Source) -> Vec<Skill> {
 }
 
 /// (descripción, cuerpo) de un `SKILL.md`.
-fn parse_skill(text: &str) -> (String, String) {
+pub(crate) fn parse_skill(text: &str) -> (String, String) {
     let text = text.replace("\r\n", "\n");
     let Some((front, body)) = text.strip_prefix("---\n").and_then(|t| t.split_once("\n---")) else {
         return (first_line(&text), text);

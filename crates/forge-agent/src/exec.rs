@@ -85,6 +85,11 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Resumen estable (el de la biblioteca cambia entre versiones).
+pub fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
+}
+
 /// Shell del usuario, con su PATH (como sus terminales).
 pub fn shell() -> String {
     std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into())

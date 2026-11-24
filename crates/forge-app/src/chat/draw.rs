@@ -9,6 +9,7 @@ use forge_agent::know::Source;
 use forge_agent::tools::{Detail, DiffLine, LineKind};
 
 use super::md::{self, Block, mono, span};
+use super::panels;
 use super::{
     Body, Chat, ChatHit, Chats, Form, Item, MemoryView, Phase, Popup, Status, ToolItem, ToolState,
     folder_name,
@@ -473,6 +474,26 @@ impl Build<'_> {
         }
     }
 
+    /// Final de la salida de una herramienta.
+    fn tail(&mut self, i: usize, t: &ToolItem, open: bool, x: f32, cw: f32, w: f32) {
+        let out = t.output.trim_end();
+        if out.is_empty() {
+            return;
+        }
+        let pad = self.d(14.0);
+        let all: Vec<&str> = out.lines().collect();
+        let n = all.len();
+        let shown = if open { &all[n.saturating_sub(400)..] } else { &all[n.saturating_sub(OUT_FOLD)..] };
+        let y = self.y;
+        self.push(Area::new(0.0, y, w, 1.0), What::Round { color: LINE, alpha: 1.0, radius: 0.0 });
+        self.y += self.d(8.0);
+        self.output(&shown.join("\n"), x, cw, DIM);
+        self.y += self.d(4.0);
+        if n > OUT_FOLD {
+            self.more(i, n - OUT_FOLD, open, pad + self.d(10.0), w - 2.0 * pad);
+        }
+    }
+
     fn tool(&mut self, i: usize, t: &ToolItem, open: bool) {
         let w = self.w;
         let asking = match &t.state {
@@ -534,24 +555,7 @@ impl Build<'_> {
                     }
                     self.y += self.d(6.0);
                 }
-                let out = t.output.trim_end();
-                if !out.is_empty() {
-                    let all: Vec<&str> = out.lines().collect();
-                    let n = all.len();
-                    let shown =
-                        if open { &all[n.saturating_sub(400)..] } else { &all[n.saturating_sub(OUT_FOLD)..] };
-                    let y = self.y;
-                    self.push(
-                        Area::new(0.0, y, w, 1.0),
-                        What::Round { color: LINE, alpha: 1.0, radius: 0.0 },
-                    );
-                    self.y += self.d(8.0);
-                    self.output(&shown.join("\n"), x, cw, DIM);
-                    self.y += self.d(4.0);
-                    if n > OUT_FOLD {
-                        self.more(i, n - OUT_FOLD, open, pad + self.d(10.0), w - 2.0 * pad);
-                    }
-                }
+                self.tail(i, t, open, x, cw, w);
                 if !sandboxed && asking.is_none() {
                     let y = self.y;
                     self.label("⚠ Fuera del sandbox", x, y, cw, 11.5, HOT, true, Align::Left);
@@ -559,7 +563,30 @@ impl Build<'_> {
                 }
                 self.y += self.d(6.0);
             }
-            Detail::None => self.y += self.d(4.0),
+            Detail::Call(args) => {
+                let x = pad + self.d(22.0);
+                let cw = w - x - pad;
+                // Lo que hay que aprobar se enseña entero.
+                let lines: Vec<&str> = args.lines().collect();
+                let n = if asking.is_some() || open { 400 } else { 8 };
+                let more = if lines.len() > n { "\n…" } else { "" };
+                let shown = format!("{}{more}", lines[..lines.len().min(n)].join("\n"));
+                let rich = self.rich(md::highlight("json", &shown), 13.0, 1.45);
+                self.text(rich, x, cw, true);
+                if let Some(Piece { what: What::Text { codes, .. }, .. }) = self.pieces.last_mut() {
+                    codes.clear();
+                }
+                self.y += self.d(6.0);
+                self.tail(i, t, open, x, cw, w);
+                self.y += self.d(6.0);
+            }
+            Detail::None => {
+                // Una herramienta MCP sin argumentos también tiene salida.
+                if open && !t.output.is_empty() {
+                    self.tail(i, t, open, pad + self.d(22.0), w - 2.0 * pad - self.d(22.0), w);
+                }
+                self.y += self.d(4.0);
+            }
         }
         if let Some(a) = asking {
             let y = self.y;
@@ -584,6 +611,10 @@ impl Build<'_> {
             if a.reason.is_none() {
                 x +=
                     self.button("Siempre en este chat", x, ChatHit::AllowAll(t.id), Btn::Plain) + self.d(8.0);
+            }
+            if a.tool.is_some() {
+                let hit = ChatHit::AllowTool(t.id);
+                x += self.button("Siempre esta herramienta", x, hit, Btn::Plain) + self.d(8.0);
             }
             x += self.button("No, para  esc", x, ChatHit::Deny(t.id), Btn::Plain) + self.d(14.0);
             let y = self.y;
@@ -799,7 +830,7 @@ fn day_group(updated: i64, today: NaiveDate) -> &'static str {
 pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: Option<Hit>) {
     ui.fill(area, SIDE_BG);
     // La lista va primero: lo que sobresale por arriba y por abajo se tapa.
-    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(108.0));
+    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(136.0));
     let view = Area::new(area.x, list_top, area.w - 1.0, (foot - list_top).max(0.0));
     let row = ui.s(48.0);
     let mut y = list_top - chats.side_scroll;
@@ -898,17 +929,21 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
     ui.text("⌘N", new.x, new.y + ui.s(9.0), new.w - ui.s(12.0), 11.0, FAINT, false, Align::Right);
     ui.hit(new, Hit::Chat(ChatHit::New));
 
-    // Memoria y habilidades.
-    let m = Area::new(area.x + ui.s(8.0), area.bottom() - ui.s(102.0), area.w - ui.s(16.0), ui.s(32.0));
-    ui.fill(Area::new(area.x, m.y - ui.s(6.0), area.w - 1.0, 1.0), LINE);
-    let hov = env.hover == Some(ChatHit::Memory);
-    if hov {
-        ui.round(m, ui::HOVER_BG, 1.0, 9.0);
+    // Memoria, habilidades y servidores MCP.
+    let top = area.bottom() - ui.s(130.0);
+    ui.fill(Area::new(area.x, top - ui.s(6.0), area.w - 1.0, 1.0), LINE);
+    let links = [("✦", "Memoria y habilidades", ChatHit::Memory), ("⧉", "Servidores MCP", ChatHit::Mcp)];
+    for (i, (icon, text, hit)) in links.into_iter().enumerate() {
+        let m = Area::new(area.x + ui.s(8.0), top + ui.s(30.0) * i as f32, area.w - ui.s(16.0), ui.s(29.0));
+        let hov = env.hover == Some(hit);
+        if hov {
+            ui.round(m, ui::HOVER_BG, 1.0, 9.0);
+        }
+        ui.text(icon, m.x + ui.s(11.0), m.y + ui.s(6.5), ui.s(16.0), 11.5, EMBER, true, Align::Left);
+        let color = if hov { TEXT } else { DIM };
+        ui.text(text, m.x + ui.s(30.0), m.y + ui.s(6.0), m.w, 12.0, color, false, Align::Left);
+        ui.hit(m, Hit::Chat(hit));
     }
-    ui.text("✦", m.x + ui.s(11.0), m.y + ui.s(8.0), ui.s(16.0), 11.5, EMBER, true, Align::Left);
-    let color = if hov { TEXT } else { DIM };
-    ui.text("Memoria y habilidades", m.x + ui.s(30.0), m.y + ui.s(7.5), m.w, 12.0, color, false, Align::Left);
-    ui.hit(m, Hit::Chat(ChatHit::Memory));
 
     // Servidor.
     let a = Area::new(area.x + ui.s(8.0), area.bottom() - ui.s(62.0), area.w - ui.s(16.0), ui.s(52.0));
@@ -998,12 +1033,26 @@ pub fn draw_chat(
         over.text(t, a.x, a.y + over.s(7.0), a.w, 12.5, TEXT, true, Align::Center);
     }
     slash_menu(over, area, x, top, chats, env);
+    let mut grew = None;
     match &chats.popup {
         Popup::None => {}
         Popup::Models => models_menu(over, area, x, top, chats, env),
         Popup::Projects => projects_menu(over, area, x, top, chats, env),
         Popup::Memory(v) => memory_panel(over, area, v, env),
+        Popup::Mcp(p) => grew = Some(panels::mcp_panel(over, area, chats, p, env)),
+        Popup::McpForm(f) => panels::mcp_form(over, area, chats, f, env),
+        Popup::Skill(f) => {
+            if let Some(c) = chats.current() {
+                grew = Some(panels::skill_form(over, area, f, &c.know(), env));
+            }
+        }
         Popup::Form(f) => form(over, area, chats, f, env),
+    }
+    // Cuánto se puede desplazar el panel.
+    match (&mut chats.popup, grew) {
+        (Popup::Mcp(p), Some(m)) => (p.max, p.scroll) = (m, p.scroll.min(m)),
+        (Popup::Skill(f), Some(m)) => (f.max, f.scroll) = (m, f.scroll.min(m)),
+        _ => {}
     }
 }
 
@@ -1129,6 +1178,7 @@ fn live_text(c: &Chat) -> Option<(String, Option<std::time::Instant>)> {
             let size = if *n > 400 { format!(" · {:.1} kB", *n as f32 / 1000.0) } else { String::new() };
             Some((format!("{what}{size}"), None))
         }
+        Phase::Starting(n, t) => Some((format!("Arrancando {n}"), Some(*t))),
         Phase::Compacting(t) => Some(("Resumiendo la conversación para hacer sitio".into(), Some(*t))),
         Phase::Tool => None,
         Phase::Stopping => Some(("Parando…".into(), None)),
@@ -1556,6 +1606,47 @@ fn slash_menu(ui: &mut Ui, screen: Area, x: f32, bottom: f32, chats: &Chats, env
     ui.hit(a, Hit::Chat(ChatHit::Inside));
 }
 
+/// Ventana centrada con título. Devuelve (x, ancho, y del contenido, caja).
+pub(super) fn window(
+    ui: &mut Ui,
+    screen: Area,
+    w: f32,
+    h: f32,
+    title: &str,
+    about: &str,
+) -> (f32, f32, f32, Area) {
+    ui.tint(screen, [0, 0, 0], 0.55);
+    let w = ui.s(w).min(screen.w - ui.s(40.0));
+    let h = ui.s(h).min(screen.h - ui.s(40.0));
+    let a = Area::new(screen.x + (screen.w - w) / 2.0, screen.y + (screen.h - h) / 2.0, w, h);
+    ui.glow(a, [0, 0, 0], 0.7, 16.0, 40.0);
+    ui.panel(a, [0x1d, 0x19, 0x16], ui::BORDER, 16.0, 1.0);
+    let pad = ui.s(26.0);
+    let (x, w) = (a.x + pad, a.w - 2.0 * pad);
+    ui.text(title, x, a.y + ui.s(22.0), w, 19.0, TEXT, true, Align::Left);
+    ui.text(about, x, a.y + ui.s(54.0), w, 12.5, DIM, false, Align::Left);
+    (x, w, a.y + ui.s(88.0), a)
+}
+
+/// Botones de ventana; devuelven su borde izquierdo.
+pub(super) fn primary(ui: &mut Ui, t: &str, right: f32, y: f32, w: f32, hit: ChatHit, env: &Env) -> f32 {
+    let b = Area::new(right - w, y, w, ui.s(36.0));
+    let hov = env.hover == Some(hit);
+    ui.gradient(b, (if hov { HOT } else { [0xf6, 0x9a, 0x55] }, 1.0), (EMBER_DEEP, 1.0), 10.0);
+    ui.text(t, b.x, b.y + ui.s(8.0), b.w, 13.0, ON_EMBER, true, Align::Center);
+    ui.hit(b, Hit::Chat(hit));
+    b.x
+}
+
+pub(super) fn secondary(ui: &mut Ui, t: &str, right: f32, y: f32, w: f32, hit: ChatHit, env: &Env) -> f32 {
+    let b = Area::new(right - w, y, w, ui.s(36.0));
+    let hov = env.hover == Some(hit);
+    ui.panel(b, if hov { ui::ACTIVE_BG } else { ui::HOVER_BG }, ui::BORDER, 10.0, 1.0);
+    ui.text(t, b.x, b.y + ui.s(8.0), b.w, 13.0, TEXT, true, Align::Center);
+    ui.hit(b, Hit::Chat(hit));
+    b.x
+}
+
 /// Panel de memoria y habilidades.
 fn memory_panel(ui: &mut Ui, screen: Area, v: &MemoryView, env: &Env) {
     ui.tint(screen, [0, 0, 0], 0.55);
@@ -1635,6 +1726,10 @@ fn memory_panel(ui: &mut Ui, screen: Area, v: &MemoryView, env: &Env) {
     }
     ui.text("HABILIDADES", x, y, w * 0.6, 10.5, EMBER, true, Align::Left);
     link(ui, "Abrir la carpeta", y, ChatHit::SkillsFolder);
+    let b = Area::new(x + w - ui.s(270.0), y - ui.s(3.0), ui.s(130.0), ui.s(22.0));
+    let c = if env.hover == Some(ChatHit::SkillAdd) { HOT } else { EMBER };
+    ui.text("Instalar de GitHub…", b.x, b.y + ui.s(4.0), b.w, 11.0, c, true, Align::Right);
+    ui.hit(b, Hit::Chat(ChatHit::SkillAdd));
     y += ui.s(24.0);
     let fit = ((bottom - y) / row).max(0.0) as usize;
     for (i, s) in v.skills.iter().enumerate() {
@@ -2006,7 +2101,7 @@ fn form(ui: &mut Ui, screen: Area, chats: &Chats, f: &Form, env: &Env) {
     ui.hit(a, Hit::Chat(ChatHit::Inside));
 }
 
-fn wrap(s: &str, max: usize) -> Vec<String> {
+pub(super) fn wrap(s: &str, max: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for w in s.split_whitespace() {
         match out.last_mut() {

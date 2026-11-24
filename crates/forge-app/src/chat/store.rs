@@ -8,6 +8,7 @@
 //! Cada conversación es un archivo de dos líneas: la ficha (para la lista, sin
 //! leer el resto) y el contenido.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use forge_agent::api::{Msg, Server, Stats};
 use forge_agent::tools::Detail;
 use serde::{Deserialize, Serialize};
 
+use super::extend::McpState;
 use crate::worktree::Worktree;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ pub struct Saved {
     pub recents: Vec<PathBuf>,
     /// Quién hace las tareas de la mesa.
     pub worker: Option<String>,
+    /// Lo decidido de cada servidor MCP.
+    pub mcp: BTreeMap<String, McpState>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -156,7 +160,7 @@ pub fn store(p: &Path, meta: &Meta, body: &Stored) -> std::io::Result<()> {
 }
 
 /// Escribe de una vez (archivo nuevo y cambio de nombre), solo para el usuario.
-fn write_private(p: &Path, text: &str) -> std::io::Result<()> {
+pub fn write_private(p: &Path, text: &str) -> std::io::Result<()> {
     if let Some(d) = p.parent() {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)?;
     }
