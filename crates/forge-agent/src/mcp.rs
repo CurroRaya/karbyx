@@ -22,10 +22,12 @@ use serde_json::{Value, json};
 
 use crate::api::Call;
 use crate::exec;
+use crate::remote;
 use crate::tools::{Action, Detail, Need, Outcome, middle_out};
+use crate::web;
 
 /// Versión del protocolo que se pide.
-const PROTOCOL: &str = "2025-06-18";
+pub(crate) const PROTOCOL: &str = "2025-06-18";
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 const CALL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Una línea más larga no es razonable.
@@ -42,11 +44,19 @@ pub struct Config {
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Servidor remoto: su dirección y las cabeceras que se le mandan.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "serverUrl", alias = "httpUrl")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
 }
 
 impl Config {
     /// La orden, para enseñarla.
     pub fn line(&self) -> String {
+        if let Some(u) = &self.url {
+            return u.clone();
+        }
         let quote = |s: &str| {
             if !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || "-_./@:=+,%".contains(c)) {
                 s.to_string()
@@ -55,6 +65,11 @@ impl Config {
             }
         };
         std::iter::once(&self.command).chain(&self.args).map(|s| quote(s)).collect::<Vec<_>>().join(" ")
+    }
+
+    /// Dónde está, si es remoto.
+    pub fn host(&self) -> Option<String> {
+        Some(web::host(self.url.as_deref()?))
     }
 
     /// Huella de lo que se aprueba: si cambia, hay que aprobarlo otra vez.
@@ -75,7 +90,11 @@ pub fn parse(text: &str) -> Result<Vec<(String, Config)>, String> {
         let words = split(text)?;
         let (command, args) = words.split_first().ok_or("Falta la orden")?;
         if command.starts_with("http://") || command.starts_with("https://") {
-            return Err(REMOTE.into());
+            if !args.is_empty() {
+                return Err("Pon solo la dirección".into());
+            }
+            let c = Config { url: Some(command.clone()), ..Config::default() };
+            return Ok(vec![(remote_name(command)?, check(c)?)]);
         }
         // El nombre sale del paquete: `@org/server-github` → `github`.
         let pkg = args.iter().find(|a| !a.starts_with('-')).unwrap_or(command);
@@ -87,33 +106,63 @@ pub fn parse(text: &str) -> Result<Vec<(String, Config)>, String> {
             .trim_end_matches("-mcp")
             .trim_end_matches(".py")
             .trim_end_matches(".js");
-        let c = Config { command: command.clone(), args: args.to_vec(), env: BTreeMap::new() };
+        let c = Config { command: command.clone(), args: args.to_vec(), ..Config::default() };
         return Ok(vec![(name_ok(name)?, c)]);
     }
     let v: Value = serde_json::from_str(text).map_err(|e| format!("El JSON no es válido: {e}"))?;
     let map = v.get("mcpServers").or_else(|| v.get("servers")).unwrap_or(&v);
-    if map.get("command").is_some_and(Value::is_string) {
+    if ["command", "url", "serverUrl", "httpUrl"].iter().any(|k| map.get(*k).is_some_and(Value::is_string)) {
         let c: Config = serde_json::from_value(map.clone()).map_err(|e| e.to_string())?;
-        let name = v.get("name").and_then(Value::as_str).unwrap_or(&c.command);
-        let name = name.rsplit('/').next().unwrap_or(name);
-        return Ok(vec![(name_ok(name)?, c)]);
+        let c = check(c)?;
+        let name = match (v.get("name").and_then(Value::as_str), &c.url) {
+            (Some(n), _) => name_ok(n)?,
+            (None, Some(u)) => remote_name(u)?,
+            (None, None) => name_ok(c.command.rsplit('/').next().unwrap_or(&c.command))?,
+        };
+        return Ok(vec![(name, c)]);
     }
     let map = map.as_object().filter(|m| !m.is_empty()).ok_or("No hay ningún servidor en ese JSON")?;
     let mut out = Vec::new();
     for (name, c) in map {
-        if c.get("url").is_some() || c.get("serverUrl").is_some() {
-            return Err(format!("{name}: {REMOTE}"));
-        }
         let c: Config = serde_json::from_value(c.clone()).map_err(|e| format!("{name}: {e}"))?;
-        if c.command.trim().is_empty() {
-            return Err(format!("{name}: falta «command»"));
-        }
-        out.push((name_ok(name)?, c));
+        out.push((name_ok(name)?, check(c).map_err(|e| format!("{name}: {e}"))?));
     }
     Ok(out)
 }
 
-const REMOTE: &str = "de momento solo servidores que se lanzan en este Mac, no direcciones";
+/// Que sea lanzable o alcanzable.
+fn check(mut c: Config) -> Result<Config, String> {
+    match c.url.as_mut().map(|u| u.trim().to_string()) {
+        Some(u) => {
+            web::check(&u)?;
+            let bad = |s: &str| s.chars().any(|c| c.is_control());
+            let name =
+                |k: &str| !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b));
+            if !c.headers.iter().all(|(k, v)| name(k) && !bad(v)) {
+                return Err("hay una cabecera no válida".into());
+            }
+            // Lo demás no se usa: que no se apruebe sin verse.
+            Ok(Config { url: Some(u), headers: c.headers, ..Config::default() })
+        }
+        None if c.command.trim().is_empty() => Err("falta «command» o «url»".into()),
+        None => Ok(Config { headers: BTreeMap::new(), ..c }),
+    }
+}
+
+/// `https://mcp.linear.app/mcp` → `linear`.
+fn remote_name(url: &str) -> Result<String, String> {
+    let host = web::host(url);
+    let host = host.split(':').next().unwrap_or(&host);
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return name_ok("remoto");
+    }
+    let parts: Vec<&str> = host.split('.').filter(|p| !matches!(*p, "mcp" | "www" | "api")).collect();
+    name_ok(match parts.as_slice() {
+        [] => "remoto",
+        [one] => one,
+        [.., n, _] => n,
+    })
+}
 
 /// Nombre usable como parte del de una herramienta.
 fn name_ok(n: &str) -> Result<String, String> {
@@ -265,9 +314,19 @@ fn simplify(v: &Value, depth: usize) -> Value {
 
 type Waiting = Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>;
 
-/// Un servidor en marcha.
+/// Un servidor en marcha (o al otro lado de la red).
 pub struct Client {
     pub tools: Vec<Tool>,
+    link: Link,
+}
+
+enum Link {
+    Local(Local),
+    Remote(remote::Remote),
+}
+
+/// Proceso en este Mac.
+struct Local {
     child: Mutex<Child>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     waiting: Arc<Waiting>,
@@ -276,7 +335,7 @@ pub struct Client {
     errors: Arc<Mutex<String>>,
 }
 
-impl Drop for Client {
+impl Drop for Local {
     fn drop(&mut self) {
         // Al cerrar su entrada, un servidor educado termina.
         self.stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -312,8 +371,112 @@ fn user_path() -> &'static str {
 }
 
 impl Client {
-    /// Arranca el servidor y le pregunta qué herramientas tiene.
+    /// Arranca (o conecta con) el servidor y le pregunta qué herramientas tiene.
     pub fn start(config: &Config, cwd: &Path, cancelled: &dyn Fn() -> bool) -> Result<Self, String> {
+        let link = match &config.url {
+            Some(u) => Link::Remote(remote::Remote::new(u, &config.headers)?),
+            None => Link::Local(Local::start(config, cwd)?),
+        };
+        let mut c = Self { tools: Vec::new(), link };
+        c.handshake(cancelled)?;
+        Ok(c)
+    }
+
+    fn alive(&self) -> bool {
+        match &self.link {
+            Link::Local(l) => l.alive(),
+            Link::Remote(_) => true,
+        }
+    }
+
+    fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Value, String> {
+        match &self.link {
+            Link::Local(l) => l.request(method, params, timeout, cancelled),
+            Link::Remote(r) => r.request(method, params, timeout, cancelled),
+        }
+    }
+
+    fn notify(&self, method: &str) -> Result<(), String> {
+        let v = json!({"jsonrpc": "2.0", "method": method});
+        match &self.link {
+            Link::Local(l) => l.send(&v),
+            Link::Remote(r) => r.notify(&v),
+        }
+    }
+
+    fn handshake(&mut self, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+        self.request("initialize", hello(), START_TIMEOUT, cancelled)?;
+        self.notify("notifications/initialized")?;
+        let mut cursor: Option<String> = None;
+        // Paginado, con un tope por si el servidor no acaba nunca.
+        for _ in 0..20 {
+            let params = cursor.as_ref().map_or(json!({}), |c| json!({"cursor": c}));
+            let r = self.request("tools/list", params, START_TIMEOUT, cancelled)?;
+            for t in r.get("tools").and_then(Value::as_array).into_iter().flatten() {
+                let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
+                if self.tools.len() < TOOLS_MAX && !self.tools.iter().any(|x| x.name == name) {
+                    self.tools.push(Tool {
+                        name: name.into(),
+                        description: t.get("description").and_then(Value::as_str).unwrap_or_default().into(),
+                        schema: t.get("inputSchema").cloned().unwrap_or_default(),
+                    });
+                }
+            }
+            cursor =
+                r.get("nextCursor").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Llama a una herramienta. (bien, texto)
+    pub(crate) fn call(
+        &self,
+        tool: &str,
+        args: &Value,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(bool, String), String> {
+        let r =
+            self.request("tools/call", json!({"name": tool, "arguments": args}), CALL_TIMEOUT, cancelled)?;
+        let ok = !r.get("isError").and_then(Value::as_bool).unwrap_or(false);
+        let mut out: Vec<String> = Vec::new();
+        for c in r.get("content").and_then(Value::as_array).into_iter().flatten() {
+            let text = |p: &str| c.pointer(p).and_then(Value::as_str).map(str::to_string);
+            match c.get("type").and_then(Value::as_str) {
+                Some("text") => out.extend(text("/text")),
+                Some("resource") => {
+                    out.extend(text("/resource/text").or_else(|| text("/resource/uri")));
+                }
+                Some("resource_link") => out.extend(text("/uri")),
+                Some(t) => out.push(format!("[{t} omitted]")),
+                None => {}
+            }
+        }
+        if out.is_empty()
+            && let Some(s) = r.get("structuredContent")
+        {
+            out.push(s.to_string());
+        }
+        Ok((ok, out.join("\n")))
+    }
+}
+
+/// Presentación.
+pub(crate) fn hello() -> Value {
+    json!({"protocolVersion": PROTOCOL, "capabilities": {},
+        "clientInfo": {"name": "forge", "version": env!("CARGO_PKG_VERSION")}})
+}
+
+impl Local {
+    fn start(config: &Config, cwd: &Path) -> Result<Self, String> {
         let mut child = Command::new(&config.command)
             .args(&config.args)
             .current_dir(cwd)
@@ -347,46 +510,7 @@ impl Client {
                 waiting.lock().unwrap_or_else(|e| e.into_inner()).clear();
             });
         }
-        let mut c = Self {
-            tools: Vec::new(),
-            child: Mutex::new(child),
-            stdin,
-            waiting,
-            next: AtomicU64::new(1),
-            alive,
-            errors,
-        };
-        c.handshake(cancelled)?;
-        Ok(c)
-    }
-
-    fn handshake(&mut self, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
-        let hello = json!({"protocolVersion": PROTOCOL, "capabilities": {},
-            "clientInfo": {"name": "forge", "version": env!("CARGO_PKG_VERSION")}});
-        self.request("initialize", hello, START_TIMEOUT, cancelled)?;
-        self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
-        let mut cursor: Option<String> = None;
-        // Paginado, con un tope por si el servidor no acaba nunca.
-        for _ in 0..20 {
-            let params = cursor.as_ref().map_or(json!({}), |c| json!({"cursor": c}));
-            let r = self.request("tools/list", params, START_TIMEOUT, cancelled)?;
-            for t in r.get("tools").and_then(Value::as_array).into_iter().flatten() {
-                let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
-                if self.tools.len() < TOOLS_MAX && !self.tools.iter().any(|x| x.name == name) {
-                    self.tools.push(Tool {
-                        name: name.into(),
-                        description: t.get("description").and_then(Value::as_str).unwrap_or_default().into(),
-                        schema: t.get("inputSchema").cloned().unwrap_or_default(),
-                    });
-                }
-            }
-            cursor =
-                r.get("nextCursor").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string);
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(())
+        Ok(Self { child: Mutex::new(child), stdin, waiting, next: AtomicU64::new(1), alive, errors })
     }
 
     fn alive(&self) -> bool {
@@ -445,32 +569,6 @@ impl Client {
                 return Err(if stop { "parado".into() } else { "tarda demasiado".into() });
             }
         }
-    }
-
-    /// Llama a una herramienta. (bien, texto)
-    fn call(&self, tool: &str, args: &Value, cancelled: &dyn Fn() -> bool) -> Result<(bool, String), String> {
-        let r =
-            self.request("tools/call", json!({"name": tool, "arguments": args}), CALL_TIMEOUT, cancelled)?;
-        let ok = !r.get("isError").and_then(Value::as_bool).unwrap_or(false);
-        let mut out: Vec<String> = Vec::new();
-        for c in r.get("content").and_then(Value::as_array).into_iter().flatten() {
-            let text = |p: &str| c.pointer(p).and_then(Value::as_str).map(str::to_string);
-            match c.get("type").and_then(Value::as_str) {
-                Some("text") => out.extend(text("/text")),
-                Some("resource") => {
-                    out.extend(text("/resource/text").or_else(|| text("/resource/uri")));
-                }
-                Some("resource_link") => out.extend(text("/uri")),
-                Some(t) => out.push(format!("[{t} omitted]")),
-                None => {}
-            }
-        }
-        if out.is_empty()
-            && let Some(s) = r.get("structuredContent")
-        {
-            out.push(s.to_string());
-        }
-        Ok((ok, out.join("\n")))
     }
 }
 
@@ -545,7 +643,9 @@ fn listen(out: impl Read, stdin: &Mutex<Option<ChildStdin>>, waiting: &Waiting) 
 pub fn shared(config: &Config, cwd: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<Client>, String> {
     type Key = (String, PathBuf);
     static ALL: Mutex<Option<HashMap<Key, Weak<Client>>>> = Mutex::new(None);
-    let key = (config.fingerprint(), cwd.to_path_buf());
+    // Uno remoto no depende de la carpeta.
+    let place = if config.url.is_some() { Path::new("/") } else { cwd };
+    let key = (config.fingerprint(), place.to_path_buf());
     let find = || {
         let g = ALL.lock().unwrap_or_else(|e| e.into_inner());
         g.as_ref()?.get(&key)?.upgrade().filter(|c| c.alive())
@@ -606,7 +706,7 @@ impl Set {
             on(&s.name);
             match shared(&s.config, cwd, cancelled) {
                 Ok(c) => set.list.push((s.clone(), c)),
-                Err(e) => bad.push(format!("No arranca el servidor MCP «{}»: {e}.", s.name)),
+                Err(e) => bad.push(format!("El servidor MCP «{}» no está disponible: {e}.", s.name)),
             }
         }
         (set, bad)
@@ -657,7 +757,10 @@ impl Set {
         let need = if s.trusted.contains(&t.name) {
             Need::Free
         } else {
-            Need::Always(format!("lo hace el servidor MCP «{}», fuera del sandbox", s.name))
+            Need::Always(match s.config.host() {
+                Some(h) => format!("estos datos salen de tu Mac hacia {h}"),
+                None => format!("lo hace el servidor MCP «{}», fuera del sandbox", s.name),
+            })
         };
         let shown = serde_json::to_string_pretty(&args).unwrap_or_default();
         let detail =
@@ -718,6 +821,7 @@ for line in sys.stdin:
             command: "/usr/bin/python3".into(),
             args: vec!["-c".into(), SERVER.into()],
             env: BTreeMap::from([("X".into(), "1".into())]),
+            ..Config::default()
         }
     }
 
@@ -814,14 +918,26 @@ for line in sys.stdin:
         for bad in [
             "{mal",
             "{}",
-            r#"{"mcpServers": {"x": {"url": "https://a"}}}"#,
-            "https://a.com/mcp",
+            "http://a.com/mcp",
+            "https://a.com/mcp otra",
+            "https://usuario:clave@a.com",
+            r#"{"mcpServers": {"x": {"url": "ftp://a"}}}"#,
+            r#"{"url": "https://a.com", "headers": {"X": "a\r\nB: c"}}"#,
             "npx x; rm -rf y",
             "node 'sin cerrar",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
         assert_ne!(v[0].1.fingerprint(), v[1].1.fingerprint());
+        // Remotos.
+        assert_eq!(names("https://mcp.linear.app/mcp"), one("linear", "https://mcp.linear.app/mcp"));
+        assert_eq!(names("http://192.168.1.9:3000/mcp"), one("remoto", "http://192.168.1.9:3000/mcp"));
+        let j = r#"{"mcpServers": {"gh": {"type": "http", "url": "https://api.github.com/mcp", "headers": {"Authorization": "Bearer x"}, "command": "malo"}}}"#;
+        let c = &parse(j).unwrap()[0].1;
+        assert_eq!((c.headers.len(), c.command.as_str()), (1, ""), "lo que no se ve no se guarda");
+        // Añadir campos no invalida lo ya aprobado.
+        let old = Config { command: "a".into(), ..Config::default() };
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"command":"a","args":[]}"#);
     }
 
     #[test]

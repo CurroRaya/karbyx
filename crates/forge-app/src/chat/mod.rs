@@ -82,6 +82,8 @@ pub enum ChatHit {
     McpState(u16),
     McpApprove(u16),
     McpRemove(u16),
+    McpSignIn(u16),
+    McpSignOut(u16),
     McpOpen(u16),
     McpTool(u16, u16),
     McpTrust(u16, u16),
@@ -647,6 +649,8 @@ pub struct Chats {
     /// Servidores MCP, y por qué no se pudieron leer.
     pub mcp: Vec<McpView>,
     pub mcp_error: Option<String>,
+    /// Para cancelar el inicio de sesión en curso.
+    pub signing: Arc<AtomicBool>,
     /// Ya se avisó de que no se puede guardar.
     save_failed: bool,
 }
@@ -659,6 +663,7 @@ impl Chats {
             .iter()
             .map(|s| ServerView { server: s.clone(), status: Status::Checking, checked: Instant::now() })
             .collect();
+        forge_agent::oauth::set_path(store::sessions_path());
         let mut stored = store::list();
         stored.sort_by_key(|(_, m)| m.updated);
         let list: Vec<Chat> = stored
@@ -693,6 +698,7 @@ impl Chats {
             slash_off: false,
             mcp: Vec::new(),
             mcp_error: None,
+            signing: Arc::default(),
             save_failed: false,
         }
     }
@@ -2031,6 +2037,7 @@ impl App {
             "!mcp" => self.chat_click(ChatHit::Mcp),
             "!mcpadd" => self.chat_click(ChatHit::McpAdd),
             "!mcpok" => self.chat_click(ChatHit::McpAddOk),
+            "!signin" => self.chat_click(ChatHit::McpSignIn(0)),
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
             "!skill" => self.chat_click(ChatHit::SkillAdd),
             "!fetch" => self.chat_click(ChatHit::SkillFetch),

@@ -6,10 +6,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use forge_agent::install::{self, Bundle, From};
 use forge_agent::know::Know;
 use forge_agent::mcp::{self, Client, Config, Tool};
+use forge_agent::oauth;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -41,6 +44,8 @@ impl McpState {
 pub enum McpStatus {
     Unknown,
     Starting,
+    /// Esperando a que el usuario inicie sesión en el navegador.
+    SigningIn,
     Ready(Vec<Tool>),
     Failed(String),
 }
@@ -182,7 +187,7 @@ impl App {
         let project = self.mcp_project();
         let Some(v) = self.chats.mcp.iter_mut().find(|v| v.name == name) else { return };
         let approved = self.chats.saved.mcp.get(name).is_some_and(|s| s.approved == v.config.fingerprint());
-        if !approved || v.status == McpStatus::Starting {
+        if !approved || matches!(v.status, McpStatus::Starting | McpStatus::SigningIn) {
             return;
         }
         v.status = McpStatus::Starting;
@@ -194,12 +199,42 @@ impl App {
         });
     }
 
+    /// Inicia sesión en el navegador; al volver, comprueba el servidor.
+    fn sign_in_mcp(&mut self, i: usize) {
+        let Some(v) = self.chats.mcp.get_mut(i) else { return };
+        let approved =
+            self.chats.saved.mcp.get(&v.name).is_some_and(|s| s.approved == v.config.fingerprint());
+        let (Some(url), true) = (v.config.url.clone(), approved) else { return };
+        // Otra pulsación cancela la anterior y empieza de nuevo.
+        self.chats.signing.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.chats.signing = cancel.clone();
+        v.status = McpStatus::SigningIn;
+        let (name, config, proxy) = (v.name.clone(), v.config.clone(), self.proxy.clone());
+        std::thread::spawn(move || {
+            let stop = || cancel.load(Ordering::Relaxed);
+            let r = oauth::sign_in(&url, &oauth::open_browser, &stop)
+                .and_then(|()| Client::start(&config, Path::new("/"), &stop))
+                .map(|c| c.tools.clone());
+            if !stop() {
+                let _ = proxy.send_event(UserEvent::McpProbe(name, Box::new(config), r));
+            }
+        });
+    }
+
     pub(crate) fn on_mcp_probe(&mut self, name: String, config: Config, r: Result<Vec<Tool>, String>) {
         if let Some(v) = self.chats.mcp.iter_mut().find(|v| v.name == name && v.config == config) {
+            let new = !matches!(v.status, McpStatus::Ready(_));
             v.status = match r {
                 Ok(t) => McpStatus::Ready(t),
                 Err(e) => McpStatus::Failed(e),
             };
+            // Ya responde: las conversaciones abiertas lo tendrán en cuenta.
+            if new && matches!(v.status, McpStatus::Ready(_)) {
+                for a in self.chats.list.iter().filter_map(|c| c.agent.as_ref()) {
+                    a.refresh();
+                }
+            }
         }
         self.redraw();
     }
@@ -291,6 +326,10 @@ impl App {
         let gone = list.remove(i);
         if let Err(e) = save_mcp(&list) {
             return self.toast(format!("No se ha podido guardar: {e}"));
+        }
+        // Con él se olvida su sesión.
+        if let Some(u) = &gone.config.url {
+            oauth::sign_out(u);
         }
         self.chats.mcp = list;
         self.chats.saved.mcp.remove(&gone.name);
@@ -469,6 +508,15 @@ impl App {
                     self.probe_mcp(&n);
                 }
             }
+            ChatHit::McpSignIn(i) => self.sign_in_mcp(i as usize),
+            ChatHit::McpSignOut(i) => {
+                if let Some(v) = self.chats.mcp.get_mut(i as usize)
+                    && let Some(u) = &v.config.url
+                {
+                    oauth::sign_out(u);
+                    v.status = McpStatus::Failed(oauth::LOGIN.into());
+                }
+            }
             ChatHit::McpTool(i, j) => self.toggle_mcp_tool(i as usize, j as usize, false),
             ChatHit::McpTrust(i, j) => self.toggle_mcp_tool(i as usize, j as usize, true),
             ChatHit::SkillAdd => self.chats.popup = Popup::Skill(Box::default()),
@@ -489,7 +537,8 @@ impl App {
 
 /// Caracteres que hay que revisar de un servidor.
 fn review_len(c: &Config) -> usize {
-    c.line().chars().count() + c.env.iter().map(|(k, v)| k.len() + v.len() + 2).sum::<usize>()
+    let vars = c.env.iter().chain(&c.headers);
+    c.line().chars().count() + vars.map(|(k, v)| k.len() + v.len() + 2).sum::<usize>()
 }
 
 /// Dónde se instalaría, y si sustituye a otra.

@@ -12,5 +12,8 @@ pub mod http;
 pub mod install;
 pub mod know;
 pub mod mcp;
+pub mod oauth;
+mod remote;
 pub mod sandbox;
 pub mod tools;
+pub mod web;

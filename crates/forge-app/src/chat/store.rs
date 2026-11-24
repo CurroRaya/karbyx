@@ -105,6 +105,11 @@ pub enum StoredItem {
     Error(String),
 }
 
+/// Sesiones iniciadas en servidores MCP remotos.
+pub fn sessions_path() -> PathBuf {
+    path().map(|p| p.with_extension("sesiones")).unwrap_or_default()
+}
+
 /// Carpeta de la memoria.
 pub fn memory_dir() -> PathBuf {
     path().map(|p| p.with_extension("memoria")).unwrap_or_default()

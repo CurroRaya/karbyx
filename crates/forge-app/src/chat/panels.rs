@@ -4,6 +4,7 @@
 //! Cómo se ven los paneles de servidores MCP y de instalar habilidades.
 
 use forge_agent::know::Know;
+use forge_agent::oauth::{LOGIN, signed_in};
 
 use super::draw::{Env, primary, secondary, window, wrap};
 use super::edit::Editor;
@@ -55,7 +56,8 @@ fn field(ui: &mut Ui, b: Area, ed: &Editor, hint: &str) {
 /// Servidores MCP.
 pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &Env) -> f32 {
     let project = chats.current().and_then(|c| c.know().project);
-    let about = "Herramientas de otros programas para tu modelo. Se ejecutan en tu Mac, fuera del sandbox.";
+    let about =
+        "Herramientas de otros programas para tu modelo: en tu Mac (fuera del sandbox) o en internet.";
     let (x, w, top, a) = window(ui, screen, 760.0, 600.0, "Servidores MCP", about);
     let bottom = a.bottom() - ui.s(66.0);
     let view = Area::new(x - ui.s(4.0), top, w + ui.s(8.0), bottom - top);
@@ -67,7 +69,7 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
     } else if chats.mcp.is_empty() {
         for t in [
             "Todavía no hay ninguno.",
-            "Pega la configuración que dan en su web («mcpServers») o la orden con la que se lanza,",
+            "Pega la configuración que dan en su web («mcpServers»), la orden o la dirección,",
             "por ejemplo: npx -y @modelcontextprotocol/server-everything",
         ] {
             ui.text(t, x, y, w, 12.5, FAINT, false, Align::Left);
@@ -95,6 +97,9 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
         let (dot, sub, sc) = match &v.status {
             _ if !approved => (HOT, "Nuevo o cambiado: revisa la orden antes de aprobarlo".to_string(), HOT),
             McpStatus::Starting => (HOT, "Arrancando…".into(), HOT),
+            McpStatus::SigningIn => (HOT, "Inicia sesión en el navegador…".into(), HOT),
+            McpStatus::Failed(e) if e == LOGIN => (HOT, "Necesita que inicies sesión".into(), HOT),
+            McpStatus::Failed(e) if v.config.url.is_some() => (ui::RED, format!("No conecta: {e}"), ui::RED),
             McpStatus::Failed(e) => (ui::RED, format!("No arranca: {e}"), ui::RED),
             McpStatus::Ready(t) => {
                 let used = t.iter().filter(|t| !state.is_some_and(|s| s.off.contains(&t.name)));
@@ -104,7 +109,8 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
                     cost += t.cost(&v.name);
                 }
                 let many = cost > 4_000;
-                let s = format!("{k} herramientas · ≈{} tokens de contexto", ui::tok(cost as u64));
+                let what = if k == 1 { "herramienta" } else { "herramientas" };
+                let s = format!("{k} {what} · ≈{} tokens de contexto", ui::tok(cost as u64));
                 (if on { ui::GREEN } else { FAINT }, s, if many { HOT } else { FAINT })
             }
             McpStatus::Unknown => (FAINT, if on { "Activo".into() } else { String::new() }, FAINT),
@@ -131,8 +137,28 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
                 let label = mcp_label(state, project.as_deref());
                 let color = if on { ui::GREEN } else { DIM };
                 right = chip(ui, &label, right, by, color, ChatHit::McpState(n), env) - ui.s(6.0);
-                let t = if open { "Plegar" } else { "Herramientas" };
-                right = chip(ui, t, right, by, EMBER, ChatHit::McpOpen(n), env);
+                let login = v.config.url.is_some()
+                    && matches!(&v.status, McpStatus::SigningIn | McpStatus::Failed(_))
+                    && (v.status == McpStatus::SigningIn || v.status == McpStatus::Failed(LOGIN.into()));
+                let inside = v.config.url.as_deref().is_some_and(signed_in);
+                if login {
+                    let t = if v.status == McpStatus::SigningIn { "Otra vez" } else { "Iniciar sesión" };
+                    right = chip(ui, t, right, by, HOT, ChatHit::McpSignIn(n), env);
+                } else {
+                    let t = if open { "Plegar" } else { "Herramientas" };
+                    right = chip(ui, t, right, by, EMBER, ChatHit::McpOpen(n), env);
+                    if inside && open {
+                        right = chip(
+                            ui,
+                            "Cerrar sesión",
+                            right - ui.s(6.0),
+                            by,
+                            DIM,
+                            ChatHit::McpSignOut(n),
+                            env,
+                        );
+                    }
+                }
             }
         }
         let _ = right;
@@ -191,10 +217,9 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
 
 /// Añadir servidores.
 pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env) {
-    let about =
-        "Pega el JSON de «mcpServers» o la orden con la que se lanza. Revisa lo que se va a ejecutar.";
+    let about = "Pega el JSON de «mcpServers», la orden con la que se lanza o su dirección. Revísalo antes de aceptar.";
     let (x, w, mut y, a) = window(ui, screen, 760.0, 600.0, "Añadir servidor MCP", about);
-    field(ui, Area::new(x, y, w, ui.s(40.0)), &f.text, "⌘V para pegar, o npx -y paquete");
+    field(ui, Area::new(x, y, w, ui.s(40.0)), &f.text, "⌘V para pegar, npx -y paquete, o https://…");
     y += ui.s(54.0);
     if let Some(e) = &f.error {
         ui.text(e, x, y, w, 12.5, ui::RED, false, Align::Left);
@@ -204,7 +229,7 @@ pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env
     let cols = (((w - ui.s(28.0)) / ui.s(6.95)) as usize).max(20);
     for (name, c) in &f.parsed {
         let lines = wrap_mono(&c.line(), cols);
-        let env_lines = wrap_mono(&env_text(c), cols);
+        let env_lines = wrap_mono(&extra_text(c), cols);
         let h = ui.s(46.0) + ui.s(17.0) * (lines.len() + env_lines.len()) as f32;
         ui.panel(Area::new(x, y, w, h), CARD, LINE, 10.0, 1.0);
         ui.text(name, x + ui.s(14.0), y + ui.s(8.0), w * 0.5, 13.5, TEXT, true, Align::Left);
@@ -224,9 +249,26 @@ pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env
         y += h + ui.s(10.0);
     }
     let by = a.bottom() - ui.s(52.0);
-    let warn = "⚠ Es un programa: se ejecutará en tu Mac, fuera del sandbox y con tus permisos.";
-    ui.text(warn, x, by - ui.s(30.0), w, 12.0, HOT, false, Align::Left);
-    let r = primary(ui, "Añadir y arrancar  ↵", x + w, by, ui.s(176.0), ChatHit::McpAddOk, env) - ui.s(8.0);
+    let local = f.parsed.iter().any(|(_, c)| c.url.is_none());
+    let hosts: Vec<String> = f.parsed.iter().filter_map(|(_, c)| c.host()).collect();
+    let plain = f.parsed.iter().any(|(_, c)| c.url.as_deref().is_some_and(|u| u.starts_with("http://")));
+    let mut warn = Vec::new();
+    if local && !f.parsed.is_empty() {
+        warn.push(
+            "⚠ Es un programa: se ejecutará en tu Mac, fuera del sandbox y con tus permisos.".to_string(),
+        );
+    }
+    if !hosts.is_empty() {
+        warn.push(format!("⚠ Lo que el modelo le mande saldrá de tu Mac hacia {}.", hosts.join(", ")));
+    }
+    if plain {
+        warn.push("⚠ La conexión va sin cifrar (http): úsala solo en tu red.".into());
+    }
+    let top = by - ui.s(12.0) - ui.s(18.0) * warn.len() as f32;
+    for (i, t) in warn.iter().enumerate() {
+        ui.text(t, x, top + ui.s(18.0) * i as f32, w, 12.0, HOT, false, Align::Left);
+    }
+    let r = primary(ui, "Añadir  ↵", x + w, by, ui.s(176.0), ChatHit::McpAddOk, env) - ui.s(8.0);
     secondary(ui, "Volver", r, by, ui.s(90.0), ChatHit::ExtendBack, env);
     ui.hit(a, Hit::Chat(ChatHit::Inside));
 }
@@ -359,17 +401,20 @@ pub fn skill_form(ui: &mut Ui, screen: Area, f: &SkillForm, know: &Know, env: &E
     }
 }
 
-/// Variables de un servidor, sin enseñar lo que parece una clave.
-fn env_text(c: &forge_agent::mcp::Config) -> String {
-    if c.env.is_empty() {
-        return "Sin variables".into();
+/// Variables o cabeceras de un servidor, sin enseñar lo que parece una clave.
+fn extra_text(c: &forge_agent::mcp::Config) -> String {
+    let (what, map) = if c.url.is_some() { ("Cabeceras", &c.headers) } else { ("Variables", &c.env) };
+    if map.is_empty() {
+        return format!("Sin {}", what.to_lowercase());
     }
     let secret = |k: &str| {
-        ["KEY", "TOKEN", "SECRET", "PASS", "CLAVE", "AUTH"].iter().any(|s| k.to_uppercase().contains(s))
+        ["KEY", "TOKEN", "SECRET", "PASS", "CLAVE", "AUTH", "COOKIE"]
+            .iter()
+            .any(|s| k.to_uppercase().contains(s))
     };
     let one =
         |(k, v): (&String, &String)| if secret(k) { format!("{k}=•••") } else { format!("{k}={v}") };
-    format!("Variables: {}", c.env.iter().map(one).collect::<Vec<_>>().join(" "))
+    format!("{what}: {}", map.iter().map(one).collect::<Vec<_>>().join(" "))
 }
 
 /// Parte una línea en trozos de `cols` caracteres (al menos uno).

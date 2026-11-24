@@ -165,7 +165,7 @@ Cierra forge antes y vuelve a abrirla después.
 cargo uninstall forge-app forge-usage
 rm -rf ~/Applications/Forge.app                  # si instalaste la app
 rm -rf ~/.config/forge ~/Library/Caches/forge    # configuración y caché (opcional)
-rm -rf ~/Library/Application\ Support/forge      # conversaciones, memoria, servidores y claves (opcional)
+rm -rf ~/Library/Application\ Support/forge      # conversaciones, memoria, sesiones y claves (opcional)
 ```
 
 forge no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
@@ -286,21 +286,26 @@ siguiente mensaje).
 
 Tu modelo puede usar herramientas de otros programas con
 [MCP](https://modelcontextprotocol.io). En **Servidores MCP › Añadir**, pega el
-JSON de `mcpServers` que dan en su web o la orden con la que se lanza
-(`npx -y paquete`). De momento, solo los que se lanzan en el Mac (*stdio*), no los
-remotos.
+JSON de `mcpServers` que dan en su web, la orden con la que se lanza
+(`npx -y paquete`) o su dirección (`https://…`).
 
-- **Es un programa tuyo**: se ejecuta fuera del sandbox y con tus permisos. forge
-  enseña la orden entera antes de arrancarlo y, si luego cambia en el archivo,
-  vuelve a pedir tu aprobación. El `.mcp.json` de un proyecto no se carga solo;
-  *Traer del proyecto* lo enseña para que lo revises.
+- **En tu Mac**: es un programa que se ejecuta fuera del sandbox y con tus
+  permisos. forge enseña la orden entera antes de arrancarlo.
+- **Remotos** (*Streamable HTTP*; el transporte antiguo, SSE, no): **lo que el
+  modelo les mande sale de tu Mac**. Si piden cuenta, **Iniciar sesión** abre tu
+  navegador; también valen claves en `headers`. Fuera de tu red, solo `https://`.
+- **Lo que apruebas es lo que se usa**: si la orden, la dirección o las cabeceras
+  cambian en el archivo, vuelve a pedirte permiso. El `.mcp.json` de un proyecto no
+  se carga solo; *Traer del proyecto* lo enseña para que lo revises.
 - **Cada llamada se pregunta**, también en Automático, enseñando sus datos.
   *Siempre esta herramienta* deja de preguntar por ella.
 - **Cada herramienta ocupa contexto** (el panel dice cuánto). Actívalos solo en
   los proyectos que los usan, y apaga las herramientas que sobren.
 
-Se guardan en `~/.config/forge/mcp.json`, que solo tú puedes leer (puede llevar
-claves) y que los comandos del sandbox no ven.
+Se guardan en `~/.config/forge/mcp.json` y las sesiones iniciadas, en
+`~/Library/Application Support/forge/chat.sesiones`: solo los puedes leer tú, y los
+comandos del sandbox no los ven. *Cerrar sesión* la olvida en este Mac; para
+retirar el permiso del todo, hazlo en la web del servicio.
 
 #### Qué protege y qué no
 
