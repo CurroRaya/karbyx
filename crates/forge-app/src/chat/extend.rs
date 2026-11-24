@@ -75,6 +75,34 @@ pub struct McpForm {
     pub text: Editor,
     pub parsed: Vec<(String, Config)>,
     pub error: Option<String>,
+    /// Clave para un servidor remoto, y si se escribe en ella.
+    pub key: Editor,
+    pub on_key: bool,
+    /// Lo que se revisa no sale del texto (es uno que ya está).
+    pub fixed: bool,
+}
+
+impl McpForm {
+    /// ¿Tiene sentido pedir una clave? Un solo servidor remoto, sin ella.
+    pub fn wants_key(&self) -> bool {
+        match self.parsed.as_slice() {
+            [(_, c)] => c.url.is_some() && !c.headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")),
+            _ => false,
+        }
+    }
+}
+
+/// Servidor de GitHub: solo lo habitual, para no llenar el contexto.
+pub const GITHUB: &str = "https://api.githubcopilot.com/mcp/";
+const GITHUB_KEYS: &str = "https://github.com/settings/personal-access-tokens/new";
+
+/// Su configuración. Con `write`, también puede cambiar cosas.
+pub fn github(write: bool) -> String {
+    let mut headers = BTreeMap::from([("X-MCP-Toolsets", "repos,issues,pull_requests")]);
+    if !write {
+        headers.insert("X-MCP-Readonly", "true");
+    }
+    json!({"mcpServers": {"github": {"url": GITHUB, "headers": headers}}}).to_string()
 }
 
 /// Instalar habilidades.
@@ -247,7 +275,17 @@ impl App {
             f.error.get_or_insert_with(|| "Pega antes la configuración de un servidor".into());
             return;
         }
-        let new = std::mem::take(&mut f.parsed);
+        let key = f.key.text().trim().to_string();
+        if key.chars().any(|c| c.is_control() || c.is_whitespace() || !c.is_ascii()) {
+            f.error = Some("Esa clave no parece válida".into());
+            return;
+        }
+        let wants = f.wants_key();
+        let mut new = std::mem::take(&mut f.parsed);
+        if wants && !key.is_empty() {
+            let key = key.strip_prefix("Bearer").map_or(key.as_str(), str::trim);
+            new[0].1.headers.insert("Authorization".into(), format!("Bearer {key}"));
+        }
         if let Some(e) = self.chats.mcp_error.clone() {
             return self.toast(e);
         }
@@ -309,7 +347,7 @@ impl App {
             return self.toast("La orden es demasiado larga para revisarla aquí");
         }
         let parsed = vec![(v.name.clone(), v.config.clone())];
-        self.chats.popup = Popup::McpForm(Box::new(McpForm { parsed, ..McpForm::default() }));
+        self.chats.popup = Popup::McpForm(Box::new(McpForm { parsed, fixed: true, ..McpForm::default() }));
     }
 
     fn remove_mcp(&mut self, i: usize) {
@@ -370,15 +408,46 @@ impl App {
         self.mcp_text(&t);
     }
 
+    /// Ponerle (o cambiarle) la clave a un servidor remoto que ya está.
+    fn key_mcp(&mut self, i: usize) {
+        let Some(v) = self.chats.mcp.get(i) else { return };
+        let mut config = v.config.clone();
+        config.headers.retain(|k, _| !k.eq_ignore_ascii_case("authorization"));
+        let parsed = vec![(v.name.clone(), config)];
+        let f = McpForm { parsed, fixed: true, on_key: true, ..McpForm::default() };
+        self.chats.popup = Popup::McpForm(Box::new(f));
+    }
+
+    /// Rellena el formulario con el servidor de GitHub.
+    fn github_mcp(&mut self, write: bool) {
+        self.chats.popup = Popup::McpForm(Box::default());
+        self.mcp_text(&github(write));
+        if let Popup::McpForm(f) = &mut self.chats.popup {
+            f.on_key = true;
+        }
+    }
+
     /// Texto escrito o pegado en el formulario de MCP.
     pub(super) fn mcp_text(&mut self, t: &str) {
         let Popup::McpForm(f) = &mut self.chats.popup else { return };
+        if f.on_key && f.wants_key() {
+            f.key.insert(&t.replace(['\n', '\r', '\t', ' '], ""));
+            f.error = None;
+            return;
+        }
+        f.on_key = false;
+        if f.fixed {
+            return;
+        }
         f.text.insert(&t.replace(['\n', '\r', '\t'], " "));
         self.mcp_parse();
     }
 
     pub(super) fn mcp_parse(&mut self) {
         let Popup::McpForm(f) = &mut self.chats.popup else { return };
+        if f.fixed || f.on_key {
+            return;
+        }
         (f.parsed, f.error) = match mcp::parse(f.text.text()) {
             // Todo lo que se aprueba tiene que caber a la vista.
             Ok(v) if v.len() > 3 => (Vec::new(), Some("Como mucho 3 a la vez, para revisarlos bien".into())),
@@ -508,6 +577,18 @@ impl App {
                     self.probe_mcp(&n);
                 }
             }
+            ChatHit::McpKey(i) => self.key_mcp(i as usize),
+            ChatHit::McpGitHub(write) => self.github_mcp(write),
+            ChatHit::McpGitHubKey => {
+                if let Err(e) = oauth::open_browser(GITHUB_KEYS) {
+                    self.toast(e);
+                }
+            }
+            ChatHit::McpField(key) => {
+                if let Popup::McpForm(f) = &mut self.chats.popup {
+                    f.on_key = key;
+                }
+            }
             ChatHit::McpSignIn(i) => self.sign_in_mcp(i as usize),
             ChatHit::McpSignOut(i) => {
                 if let Some(v) = self.chats.mcp.get_mut(i as usize)
@@ -558,6 +639,19 @@ pub fn mcp_label(s: Option<&McpState>, project: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_is_ready_to_use() {
+        let v = mcp::parse(&github(false)).unwrap();
+        assert_eq!((v.len(), v[0].0.as_str()), (1, "github"));
+        assert_eq!(v[0].1.headers["X-MCP-Readonly"], "true");
+        assert!(!mcp::parse(&github(true)).unwrap()[0].1.headers.contains_key("X-MCP-Readonly"));
+        let f = McpForm { parsed: v, ..McpForm::default() };
+        assert!(f.wants_key());
+        let mut f = f;
+        f.parsed[0].1.headers.insert("authorization".into(), "Bearer x".into());
+        assert!(!f.wants_key());
+    }
 
     #[test]
     fn only_what_was_approved_runs() {

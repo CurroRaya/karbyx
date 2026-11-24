@@ -8,7 +8,7 @@ use forge_agent::oauth::{LOGIN, signed_in};
 
 use super::draw::{Env, primary, secondary, window, wrap};
 use super::edit::Editor;
-use super::extend::{McpForm, McpPanel, McpStatus, SkillForm, mcp_label, skill_exists};
+use super::extend::{GITHUB, McpForm, McpPanel, McpStatus, SkillForm, mcp_label, skill_exists};
 use super::{ChatHit, Chats};
 use crate::ui::{self, Align, Area, DIM, EMBER, Font, HOT, Hit, Rgb, TEXT, Ui};
 
@@ -35,22 +35,27 @@ fn chip(ui: &mut Ui, text: &str, right: f32, y: f32, color: Rgb, hit: ChatHit, e
 }
 
 /// Campo de una línea.
-fn field(ui: &mut Ui, b: Area, ed: &Editor, hint: &str) {
-    ui.glow(b, EMBER, 0.06, 10.0, 10.0);
-    ui.panel(b, FIELD, EMBER, 10.0, 1.0);
+fn field(ui: &mut Ui, b: Area, ed: &Editor, hint: &str, on: bool, secret: bool) {
+    if on {
+        ui.glow(b, EMBER, 0.06, 10.0, 10.0);
+    }
+    ui.panel(b, FIELD, if on { EMBER } else { ui::BORDER }, 10.0, 1.0);
+    let bar = if on { "▏" } else { "" };
+    let mask = |s: &str| if secret { "•".repeat(s.chars().count()) } else { s.to_string() };
     let (tx, tw) = (b.x + ui.s(14.0), b.w - ui.s(28.0));
     if ed.is_empty() {
-        ui.text(format!("▏{hint}"), tx, b.y + ui.s(9.5), tw, 13.0, FAINT, false, Align::Left);
+        ui.text(format!("{bar}{hint}"), tx, b.y + ui.s(9.5), tw, 13.0, FAINT, false, Align::Left);
         return;
     }
     let (l, r) = ed.text().split_at(ed.caret());
+    let (l, r) = (mask(l), mask(r));
     let fit = (tw / ui.s(7.4)) as usize;
     let n = l.chars().count();
-    let l: String = if n > fit { l.chars().skip(n - fit).collect() } else { l.into() };
-    if ed.selection().is_some() {
+    let l: String = if n > fit { l.chars().skip(n - fit).collect() } else { l };
+    if on && ed.selection().is_some() {
         ui.round(Area::new(tx - ui.s(3.0), b.y + ui.s(8.0), tw, b.h - ui.s(16.0)), EMBER, 0.2, 4.0);
     }
-    ui.text(format!("{l}▏{r}"), tx, b.y + ui.s(9.5), tw, 13.0, TEXT, false, Align::Left);
+    ui.text(format!("{l}{bar}{r}"), tx, b.y + ui.s(9.5), tw, 13.0, TEXT, false, Align::Left);
 }
 
 /// Servidores MCP.
@@ -122,8 +127,6 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
         };
         inside(ui, Area::new(x + ui.s(15.0), y + ui.s(15.0), ui.s(8.0), ui.s(8.0)), dot);
         ui.text(&v.name, x + ui.s(34.0), y + ui.s(9.0), ui.s(200.0), 13.5, TEXT, true, Align::Left);
-        mono(ui, v.config.line(), x + ui.s(34.0), y + ui.s(29.0), w - ui.s(290.0), 10.5, DIM);
-        ui.text(sub, x + ui.s(34.0), y + ui.s(45.0), w - ui.s(250.0), 11.0, sc, false, Align::Left);
         let mut right = x + w - ui.s(12.0);
         let by = y + ui.s(20.0);
         if by >= view.y && by + ui.s(24.0) <= view.bottom() {
@@ -143,7 +146,12 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
                 let inside = v.config.url.as_deref().is_some_and(signed_in);
                 if login {
                     let t = if v.status == McpStatus::SigningIn { "Otra vez" } else { "Iniciar sesión" };
-                    right = chip(ui, t, right, by, HOT, ChatHit::McpSignIn(n), env);
+                    right = chip(ui, t, right, by, HOT, ChatHit::McpSignIn(n), env) - ui.s(6.0);
+                    right = chip(ui, "Poner clave", right, by, EMBER, ChatHit::McpKey(n), env);
+                } else if v.config.url.is_some() && matches!(v.status, McpStatus::Failed(_)) {
+                    // Un servidor remoto que falla suele necesitar (otra) clave.
+                    right = chip(ui, "Poner clave", right, by, EMBER, ChatHit::McpKey(n), env) - ui.s(6.0);
+                    right = chip(ui, "Reintentar", right, by, DIM, ChatHit::McpOpen(n), env);
                 } else {
                     let t = if open { "Plegar" } else { "Herramientas" };
                     right = chip(ui, t, right, by, EMBER, ChatHit::McpOpen(n), env);
@@ -161,7 +169,10 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
                 }
             }
         }
-        let _ = right;
+        // Lo que dejen libre los botones.
+        let room = right - x - ui.s(44.0);
+        mono(ui, v.config.line(), x + ui.s(34.0), y + ui.s(29.0), room, 10.5, DIM);
+        ui.text(sub, x + ui.s(34.0), y + ui.s(45.0), room, 11.0, sc, false, Align::Left);
         if open && let Some(s) = state {
             let mut ty = y + ui.s(66.0);
             for (j, t) in tools.iter().enumerate() {
@@ -219,8 +230,42 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
 pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env) {
     let about = "Pega el JSON de «mcpServers», la orden con la que se lanza o su dirección. Revísalo antes de aceptar.";
     let (x, w, mut y, a) = window(ui, screen, 760.0, 600.0, "Añadir servidor MCP", about);
-    field(ui, Area::new(x, y, w, ui.s(40.0)), &f.text, "⌘V para pegar, npx -y paquete, o https://…");
-    y += ui.s(54.0);
+    let wants = f.wants_key();
+    if !f.fixed {
+        let b = Area::new(x, y, w, ui.s(40.0));
+        let hint = "⌘V para pegar, npx -y paquete, o https://…";
+        field(ui, b, &f.text, hint, !(f.on_key && wants), false);
+        ui.hit(b, Hit::Chat(ChatHit::McpField(false)));
+        y += ui.s(50.0);
+    }
+    // Atajos, mientras no hay nada escrito.
+    if f.parsed.is_empty() && f.text.is_empty() {
+        ui.text("O elige:", x, y + ui.s(5.0), ui.s(60.0), 12.0, DIM, false, Align::Left);
+        let l = x + ui.s(60.0);
+        let r = l + ui.s(170.0);
+        chip(ui, "GitHub · solo leer", r, y, EMBER, ChatHit::McpGitHub(false), env);
+        chip(ui, "GitHub · leer y escribir", r + ui.s(190.0), y, EMBER, ChatHit::McpGitHub(true), env);
+        y += ui.s(38.0);
+    }
+    if wants {
+        let b = Area::new(x, y, w, ui.s(40.0));
+        field(
+            ui,
+            b,
+            &f.key,
+            "Clave del servicio (déjalo vacío si inicia sesión o no la pide)",
+            f.on_key,
+            true,
+        );
+        ui.hit(b, Hit::Chat(ChatHit::McpField(true)));
+        y += ui.s(50.0);
+        if f.parsed[0].1.url.as_deref() == Some(GITHUB) {
+            let t = "Da a la clave solo tus repositorios y permisos de Contents, Issues y Pull requests.";
+            ui.text(t, x, y + ui.s(4.0), w - ui.s(160.0), 11.5, DIM, false, Align::Left);
+            chip(ui, "Crear la clave en GitHub", x + w, y, EMBER, ChatHit::McpGitHubKey, env);
+            y += ui.s(36.0);
+        }
+    }
     if let Some(e) = &f.error {
         ui.text(e, x, y, w, 12.5, ui::RED, false, Align::Left);
         y += ui.s(26.0);
@@ -278,7 +323,7 @@ pub fn skill_form(ui: &mut Ui, screen: Area, f: &SkillForm, know: &Know, env: &E
     let Some(b) = &f.bundle else {
         let about = "De un repositorio público de GitHub (dueño/nombre o su dirección) o de una carpeta.";
         let (x, w, mut y, a) = window(ui, screen, 640.0, 270.0, "Instalar habilidades", about);
-        field(ui, Area::new(x, y, w, ui.s(40.0)), &f.url, "dueño/repositorio");
+        field(ui, Area::new(x, y, w, ui.s(40.0)), &f.url, "dueño/repositorio", true, false);
         y += ui.s(54.0);
         let (t, c) = match (&f.error, f.busy) {
             (_, true) => ("Buscando…".to_string(), HOT),

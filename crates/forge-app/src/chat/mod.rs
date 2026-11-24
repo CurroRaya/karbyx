@@ -83,6 +83,11 @@ pub enum ChatHit {
     McpApprove(u16),
     McpRemove(u16),
     McpSignIn(u16),
+    /// Clave de un servidor, atajos de GitHub y campo en que se escribe.
+    McpKey(u16),
+    McpGitHub(bool),
+    McpGitHubKey,
+    McpField(bool),
     McpSignOut(u16),
     McpOpen(u16),
     McpTool(u16, u16),
@@ -1789,6 +1794,11 @@ impl App {
                     self.chat_stop();
                 }
             }
+            NamedKey::Tab if matches!(self.chats.popup, Popup::McpForm(_)) => {
+                if let Popup::McpForm(f) = &mut self.chats.popup {
+                    f.on_key = !f.on_key && f.wants_key();
+                }
+            }
             NamedKey::Tab if form => {
                 if let Popup::Form(f) = &mut self.chats.popup {
                     f.focus = 1 - f.focus.min(1);
@@ -1830,7 +1840,7 @@ impl App {
     fn chat_editor(&mut self) -> Option<&mut Editor> {
         match &mut self.chats.popup {
             Popup::Form(f) => Some(if f.focus == 0 { &mut f.url } else { &mut f.key }),
-            Popup::McpForm(f) => Some(&mut f.text),
+            Popup::McpForm(f) => Some(if f.on_key { &mut f.key } else { &mut f.text }),
             Popup::Skill(f) => Some(&mut f.url),
             _ => self.chats.list.get_mut(self.chats.cur).map(|c| &mut c.input),
         }
@@ -2037,6 +2047,8 @@ impl App {
             "!mcp" => self.chat_click(ChatHit::Mcp),
             "!mcpadd" => self.chat_click(ChatHit::McpAdd),
             "!mcpok" => self.chat_click(ChatHit::McpAddOk),
+            "!github" => self.chat_click(ChatHit::McpGitHub(false)),
+            "!key" => self.chat_click(ChatHit::McpKey(0)),
             "!signin" => self.chat_click(ChatHit::McpSignIn(0)),
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
             "!skill" => self.chat_click(ChatHit::SkillAdd),

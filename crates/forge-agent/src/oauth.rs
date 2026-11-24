@@ -286,7 +286,7 @@ fn discover(url: &str) -> Result<Plan, String> {
             break;
         }
     }
-    let m = found.ok_or("no sé cómo iniciar sesión en este servidor: prueba con una clave en «headers»")?;
+    let m = found.ok_or("no sé cómo iniciar sesión aquí: usa «Poner clave»")?;
     if m.get("issuer").and_then(Value::as_str).is_some_and(|i| i.trim_end_matches('/') != issuer) {
         return Err("su inicio de sesión dice ser de otro sitio".into());
     }
@@ -311,10 +311,7 @@ fn discover(url: &str) -> Result<Plan, String> {
 }
 
 fn register(plan: &Plan, redirect: &str) -> Result<(String, Option<String>), String> {
-    let url = plan
-        .register
-        .as_ref()
-        .ok_or("este servidor no deja registrarse solo: consigue una clave y ponla en «headers»")?;
+    let url = plan.register.as_ref().ok_or("no deja iniciar sesión así: usa «Poner clave»")?;
     let body = json!({"client_name": "forge", "redirect_uris": [redirect],
         "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
         "token_endpoint_auth_method": "none"});
