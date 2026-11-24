@@ -162,15 +162,28 @@ Es la pantalla con la que abre forge.
   seleccionada, responde en su terminal. forge vuelve a leer la pantalla antes
   de enviar nada: si la pregunta ya no está, no responde.
 - **Verificación automática**: cuando un agente termina en su worktree, forge
-  ejecuta los tests en segundo plano, sin gastar tokens, y la tarjeta llega a
-  *Para revisar* con un sello: **✓ 36 tests en verde** o **✕ 2 tests fallan**
-  (o *No compila*). Con un fallo, **Que lo arregle** le pasa al mismo agente
-  la salida completa para que lo corrija; al terminar se verifica otra vez.
-  ↻ repite la verificación, y **Verificar** la lanza a mano (p. ej. con Codex
-  o Gemini, que no avisan de cuándo terminan). El comando se detecta solo
-  (`cargo test`, `npm`/`pnpm`/`yarn`/`bun test`, `go test`, `pytest`,
-  `make test`) o se configura por proyecto en `[verify]`. Se ejecuta con tu
-  shell y tu `PATH`, como en tus terminales.
+  puede ejecutar los tests en segundo plano, sin gastar tokens, y la tarjeta
+  llega a *Para revisar* con un sello: **✓ 36 tests en verde** o **✕ 2 tests
+  fallan** (o *No compila*). Viene desactivada: la primera vez forge pregunta
+  **¿Verifico?** y eliges *Una vez* o *Siempre* (en ese proyecto). Con un
+  fallo, **Que lo arregle** le pasa al agente la salida completa; ↻ repite y
+  **Verificar** la lanza a mano (p. ej. con Codex o Gemini, que no avisan de
+  cuándo terminan). El comando se detecta solo (`cargo test`,
+  `npm`/`pnpm`/`yarn`/`bun test`, `go test`, `pytest`, `make test`) o se
+  configura en `[verify]`.
+  - **Aislada**: los tests son código que ha podido escribir el agente y que
+    aún no has revisado, así que se ejecutan siempre en el sandbox de macOS:
+    sin red, sin lanzar otras apps, sin leer las claves habituales (`~/.ssh`,
+    `~/.aws`, llavero, `~/.claude`...) y escribiendo solo en el worktree, la
+    caché de compilación y una carpeta temporal. Si no se puede aislar, no se
+    ejecuta. El resto de tus archivos sí se puede leer.
+  - Si el agente ha cambiado algo que decide qué se ejecuta (`Makefile`,
+    `build.rs`, `Cargo.toml`, `package.json`...), forge lo dice y espera a que
+    pulses *Verificar*, aunque el proyecto esté activado.
+  - Si tus tests necesitan red (o `localhost`): `[verify] network = ["proyecto"]`.
+    Con red, un test podría enviar fuera lo que puede leer.
+  - Los proyectos activados están en `~/Library/Caches/forge/verify-projects.txt`,
+    uno por línea: borra la línea para desactivarlo.
 - Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
   (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
 - **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan
@@ -314,8 +327,9 @@ notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
 # background = "#171412"   # cualquier color suelto sobrescribe el tema
 
-[verify]                   # tests al terminar un agente en su worktree
-auto = true                # false: solo con el botón «Verificar»
+[verify]                   # tests de un agente, en un sandbox
+auto = true                # solo en los proyectos que actives; false: en ninguno
+network = []               # proyectos cuyos tests necesitan red
 timeout_secs = 600
 [verify.commands]          # por proyecto (nombre de la carpeta); "off" la desactiva
 forge = "cargo test --workspace"

@@ -23,8 +23,9 @@
 //! background = "#171412"     # cualquier color suelto sobrescribe el tema
 //!
 //! [verify]                 # al terminar un agente en su worktree
-//! auto = true                # ejecutar los tests solos
+//! auto = true                # verificar solos los proyectos que actives (false: ninguno)
 //! timeout_secs = 600
+//! network = ["web"]          # proyectos cuyos tests necesitan red
 //! [verify.commands]          # por proyecto; si no, se detecta (cargo, npm, go...)
 //! forge = "cargo test --workspace"
 //!
@@ -104,8 +105,11 @@ pub struct ThemeConfig {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct VerifyConfig {
-    /// Ejecutarla sola cuando un agente termina en su worktree.
+    /// Ejecutarla sola cuando un agente termina en su worktree, en los
+    /// proyectos que el usuario haya activado desde la mesa.
     pub auto: bool,
+    /// Proyectos cuyos tests se ejecutan con red.
+    pub network: Vec<String>,
     pub timeout_secs: u64,
     /// Nombre del proyecto → comando (`""` o `"off"`: no verificar).
     pub commands: BTreeMap<String, String>,
@@ -113,7 +117,7 @@ pub struct VerifyConfig {
 
 impl Default for VerifyConfig {
     fn default() -> Self {
-        Self { auto: true, timeout_secs: 600, commands: BTreeMap::new() }
+        Self { auto: true, network: Vec::new(), timeout_secs: 600, commands: BTreeMap::new() }
     }
 }
 

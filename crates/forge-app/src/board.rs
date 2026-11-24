@@ -20,7 +20,7 @@ use crate::agents::AgentState;
 use crate::panes::PaneId;
 use crate::ui::{self, Align, Area, Hit, Rgb, Ui};
 use crate::usage::UsageState;
-use crate::verify::{self, Outcome, Verify};
+use crate::verify::{self, Ask, Outcome, Start, Verify};
 use crate::worktree;
 use forge_term::{CellView, Snapshot};
 
@@ -525,38 +525,64 @@ impl App {
                     && p.worktree.is_some()
                     && self.config.verify.auto =>
             {
-                self.start_verify(pane);
+                self.start_verify(pane, true);
             }
             _ => {}
         }
     }
 
-    /// Ejecuta en segundo plano los tests del worktree del agente.
-    pub(super) fn start_verify(&mut self, pane: PaneId) {
-        let Some(p) = self.panes.get(&pane) else { return };
-        let Some(wt) = p.worktree.clone() else { return };
+    /// Verifica en segundo plano el worktree del agente. `auto`: nadie lo ha
+    /// pedido, así que solo se ejecuta si el proyecto lo tiene activado.
+    pub(super) fn start_verify(&mut self, pane: PaneId, auto: bool) {
+        let Some(wt) = self.panes.get(&pane).and_then(|p| p.worktree.clone()) else { return };
         if let Some(old) = self.board.verify.remove(&pane) {
             old.stop();
         }
-        let Some(configured) = self.config.verify.command(&p.project) else {
-            self.board.notice = Some((format!("La verificación está desactivada para {}", p.project), true));
+        // El proyecto sale de cuando forge creó el worktree, no de archivos
+        // que el agente pueda cambiar.
+        let project = wt.repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let Some(configured) = self.config.verify.command(&project) else {
+            if !auto {
+                self.board.notice = Some((format!("La verificación está desactivada para {project}"), true));
+            }
             return;
         };
         let Some(dir) = dirs::cache_dir().map(|d| d.join("forge").join("verify")) else { return };
         self.board.verify_gen += 1;
         let generation = self.board.verify_gen;
-        let log = dir.join(format!("{}-{generation}.log", wt.name().replace('/', "-")));
+        let job = verify::Job {
+            start: if auto { Start::Auto { enabled: verify::is_enabled(&wt.repo) } } else { Start::Manual },
+            configured,
+            timeout: Duration::from_secs(self.config.verify.timeout_secs.max(10)),
+            network: self.config.verify.network.contains(&project),
+            log: dir.join(format!("{}-{generation}.log", wt.name().replace('/', "-"))),
+            dir: wt.path,
+            repo: wt.repo,
+            base: wt.base,
+        };
         let v = Verify::running(generation);
         let cancel = v.cancel.clone();
         self.board.verify.insert(pane, v);
-        let timeout = Duration::from_secs(self.config.verify.timeout_secs.max(10));
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            if let Some(r) = verify::check(&wt.path, &wt.base, configured, timeout, log, &cancel) {
+            if let Some(r) = verify::check(&job, &cancel) {
                 let _ = proxy.send_event(UserEvent::Verify(pane, generation, r));
             }
         });
         self.redraw();
+    }
+
+    /// Activa la verificación automática del proyecto y verifica ya.
+    fn board_verify_enable(&mut self, pane: PaneId) {
+        let Some(wt) = self.panes.get(&pane).and_then(|p| p.worktree.clone()) else { return };
+        match verify::enable(&wt.repo) {
+            Ok(()) => {
+                let name = wt.repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.board.notice = Some((format!("Verificación automática activada para {name}"), false));
+                self.start_verify(pane, false);
+            }
+            Err(e) => self.board.notice = Some((format!("No se pudo activar: {e}"), true)),
+        }
     }
 
     pub(super) fn on_verify(&mut self, pane: PaneId, generation: u64, r: verify::Report) {
@@ -569,7 +595,7 @@ impl App {
             match &r.outcome {
                 Outcome::Passed(m) => super::notify("forge", &format!("✓ {m} en {}{what}", p.project)),
                 Outcome::Failed(m) => super::notify("forge", &format!("✕ {m} en {}{what}", p.project)),
-                Outcome::Skipped(_) => {}
+                Outcome::Skipped(_) | Outcome::Ask(_) => {}
             }
         }
         v.report = Some(r);
@@ -746,7 +772,8 @@ impl App {
     pub(super) fn board_click(&mut self, hit: Hit) {
         match hit {
             Hit::BoardAnswer(p, i) => self.board_answer(p, i as usize),
-            Hit::BoardVerify(p) => self.start_verify(p),
+            Hit::BoardVerify(p) => self.start_verify(p, false),
+            Hit::BoardVerifyEnable(p) => self.board_verify_enable(p),
             Hit::BoardFix(p) => self.board_fix(p),
             Hit::BoardCard(p) | Hit::BoardShell(p) => self.go_to_pane(p),
             Hit::BoardReview(p) => {
@@ -1320,8 +1347,18 @@ fn draw_verify(ui: &mut Ui, a: Area, c: &Card, tick: u64, hover: Option<Hit>) ->
         Some(Outcome::Passed(m)) => ("✓", m.clone(), ui::GREEN),
         Some(Outcome::Failed(m)) => ("✕", m.clone(), ui::RED),
         Some(Outcome::Skipped(m)) => ("–", m.clone(), ui::DIM),
+        Some(Outcome::Ask(Ask::Enable)) => ("?", "¿Verifico?".into(), HOT),
+        Some(Outcome::Ask(Ask::Touched(f))) => ("!", format!("Cambió {f}"), HOT),
     };
-    if b.outcome.is_some() {
+    if let Some(Outcome::Ask(ask)) = &b.outcome {
+        // Nada se ha ejecutado aún: decide el usuario.
+        if *ask == Ask::Enable {
+            let hit = Hit::BoardVerifyEnable(c.pane);
+            right -= small_button(ui, right, a.y, "Siempre", STEEL, hit, hover) + gap;
+        }
+        let label = if *ask == Ask::Enable { "Una vez" } else { "Verificar" };
+        right -= small_button(ui, right, a.y, label, EMBER, Hit::BoardVerify(c.pane), hover) + gap;
+    } else if b.outcome.is_some() {
         right -= small_button(ui, right, a.y, "↻", STEEL, Hit::BoardVerify(c.pane), hover) + gap;
     }
     if matches!(b.outcome, Some(Outcome::Failed(_))) {

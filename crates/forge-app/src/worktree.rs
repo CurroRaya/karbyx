@@ -44,6 +44,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
+        // Que ningún repositorio (ni uno plantado dentro) lance programas al leerlo.
+        .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GIT_DIR")
@@ -310,7 +312,13 @@ pub fn parse(text: &str) -> Vec<FileDiff> {
 fn untracked(top: &Path, rel: &str) -> FileDiff {
     let mut f = FileDiff { path: rel.to_string(), status: 'A', added: 0, removed: 0, lines: Vec::new() };
     let full = top.join(rel);
-    let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
+    // Un enlace no se sigue: podría apuntar a cualquier archivo del disco.
+    let meta = std::fs::symlink_metadata(&full).ok();
+    if meta.as_ref().is_some_and(|m| !m.is_file()) {
+        f.lines.push(line(LineKind::Note, None, None, "enlace o archivo especial nuevo"));
+        return f;
+    }
+    let size = meta.map(|m| m.len()).unwrap_or(0);
     if size > MAX_NEW_FILE {
         f.lines.push(line(LineKind::Note, None, None, &format!("archivo nuevo de {} KB", size / 1024)));
         return f;

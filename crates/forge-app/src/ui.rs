@@ -146,6 +146,8 @@ pub enum Hit {
     /// Mesa: verificar (otra vez) los cambios de un agente y devolverle el fallo.
     BoardVerify(u64),
     BoardFix(u64),
+    /// Mesa: activar la verificación automática del proyecto.
+    BoardVerifyEnable(u64),
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
     BoardLaunch,

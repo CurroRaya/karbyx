@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::sandbox;
+
 /// Bytes de salida que se guardan (el final, que es donde están los fallos).
 const KEEP: usize = 512 * 1024;
 
@@ -26,6 +28,151 @@ pub enum Outcome {
     Failed(String),
     /// No se ejecutó nada («Sin cambios», «Sin tests que ejecutar»).
     Skipped(String),
+    /// No se ejecuta nada hasta que el usuario lo diga.
+    Ask(Ask),
+}
+
+/// Por qué forge pregunta antes de verificar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ask {
+    /// El proyecto no tiene activada la verificación automática.
+    Enable,
+    /// El agente ha cambiado un archivo que decide qué se ejecuta.
+    Touched(String),
+}
+
+/// Quién pide la verificación.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Start {
+    /// El usuario, con un botón.
+    Manual,
+    /// Sola, al terminar el agente. `enabled`: el proyecto la tiene activada.
+    Auto { enabled: bool },
+}
+
+/// Qué verificar y cómo.
+pub struct Job {
+    pub dir: PathBuf,
+    /// Copia principal del repositorio (identifica el proyecto).
+    pub repo: PathBuf,
+    pub base: String,
+    pub configured: Option<String>,
+    pub timeout: Duration,
+    pub network: bool,
+    pub log: PathBuf,
+    pub start: Start,
+}
+
+/// Archivos que deciden qué se ejecuta al lanzar los tests.
+const SENSITIVE: [&str; 24] = [
+    "makefile",
+    "gnumakefile",
+    "build.rs",
+    "cargo.toml",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "package.json",
+    ".npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    ".pnpmfile.cjs",
+    "bunfig.toml",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
+    "conftest.py",
+    "go.mod",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    ".envrc",
+    ".tool-versions",
+];
+
+/// ¿Cambia este archivo qué se ejecuta al verificar con `cmd`?
+pub fn is_sensitive(path: &str, cmd: &str) -> bool {
+    let path = path.trim_matches('"').to_lowercase();
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    SENSITIVE.contains(&name)
+        || path.starts_with(".cargo/")
+        || path.contains("/.cargo/")
+        || name.starts_with("jest.config.")
+        || name.starts_with("vitest.config.")
+        || name.starts_with("vite.config.")
+        || name.starts_with("babel.config.")
+        // Un script que nombra el propio comando configurado.
+        || cmd.to_lowercase().contains(&path)
+}
+
+/// Lista de proyectos (una ruta por línea) con la verificación automática activada.
+fn enabled_file() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("forge").join("verify-projects.txt"))
+}
+
+fn listed(text: &str, repo: &Path) -> bool {
+    repo.to_str().is_some_and(|r| text.lines().any(|l| l == r))
+}
+
+/// ¿Tiene este proyecto activada la verificación automática?
+pub fn is_enabled(repo: &Path) -> bool {
+    let text = enabled_file().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+    listed(&text, repo)
+}
+
+/// Activa la verificación automática de un proyecto.
+pub fn enable(repo: &Path) -> Result<(), String> {
+    let file = enabled_file().ok_or("sin carpeta de caché")?;
+    let repo_s = repo.to_str().filter(|r| !r.contains('\n')).ok_or("ruta no válida")?;
+    let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+    if listed(&text, repo) {
+        return Ok(());
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(repo_s);
+    text.push('\n');
+    if let Some(d) = file.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&file, text).map_err(|e| e.to_string())
+}
+
+/// Caché de compilación del proyecto: su nombre y un resumen de su ruta, para
+/// que dos proyectos que se llamen igual no la compartan.
+fn target_dir(repo: &Path) -> Option<PathBuf> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    repo.hash(&mut h);
+    let name = repo.file_name()?.to_string_lossy().into_owned();
+    Some(dirs::cache_dir()?.join("forge").join("target").join(format!("{name}-{:016x}", h.finish())))
+}
+
+/// Carpeta temporal propia de una ejecución; se borra al acabar.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> Option<Self> {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+        let d = dirs::cache_dir()?.join("forge").join("tmp").join(format!("v{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&d).ok()?;
+        Some(Self(d))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// SDK de macOS: `xcrun` no funciona dentro del sandbox.
+fn sdk_root() -> Option<String> {
+    let out = Command::new("/usr/bin/xcrun").arg("--show-sdk-path").current_dir("/").output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !s.is_empty()).then_some(s)
 }
 
 /// Resultado completo, con la salida guardada en un archivo.
@@ -35,6 +182,8 @@ pub struct Report {
     pub outcome: Outcome,
     pub took: Duration,
     pub log: Option<PathBuf>,
+    /// Se ejecutó con red.
+    pub network: bool,
 }
 
 /// Qué ejecutar en una carpeta, o por qué no hay nada que ejecutar.
@@ -166,14 +315,15 @@ fn shell() -> String {
     std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into())
 }
 
-/// Ejecuta `cmd` en `dir`. Devuelve (éxito, salida) o `None` si se canceló.
-fn run(
-    dir: &Path,
-    cmd: &str,
-    timeout: Duration,
-    cancel: &AtomicBool,
-) -> Result<Option<(bool, String)>, String> {
-    let mut command = Command::new(shell());
+/// Ejecuta `cmd` aislado en el worktree de `job`. Devuelve (éxito, salida)
+/// o `None` si se canceló.
+fn run(job: &Job, cmd: &str, cancel: &AtomicBool) -> Result<Option<(bool, String)>, String> {
+    let (dir, timeout) = (&job.dir, job.timeout);
+    let target = target_dir(&job.repo).ok_or("sin carpeta de caché")?;
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let tmp = TempDir::new().ok_or("sin carpeta temporal")?;
+    let dirs = sandbox::Dirs { worktree: dir.clone(), target: target.clone(), tmp: tmp.0.clone() };
+    let mut command = sandbox::command(&shell(), &dirs, job.network)?;
     // -i -l: carga el PATH del usuario (rustup, nvm...) aunque forge se
     // abriera desde el Finder. La salida de error va al mismo sitio.
     command
@@ -188,13 +338,17 @@ fn run(
         .env("CI", "1")
         .env("FORGE_VERIFY", "1")
         .process_group(0);
+    if dir.join("Cargo.toml").exists()
+        && let Some(sdk) = sdk_root()
+    {
+        command.env("SDKROOT", sdk);
+    }
     // Sin target propio en el worktree, uno compartido por proyecto en la
     // caché: las dependencias se compilan una vez para todos sus agentes.
-    if !dir.join("target").exists()
-        && std::env::var_os("CARGO_TARGET_DIR").is_none()
-        && let (Some(cache), Some(name)) = (dirs::cache_dir(), crate::project_root(dir).file_name())
-    {
-        command.env("CARGO_TARGET_DIR", cache.join("forge").join("target").join(name));
+    if dir.join("target").exists() {
+        command.env_remove("CARGO_TARGET_DIR");
+    } else {
+        command.env("CARGO_TARGET_DIR", &target);
     }
     let mut child = command.spawn().map_err(|e| format!("No se pudo ejecutar: {e}"))?;
     let mut stdout = child.stdout.take().ok_or("sin salida")?;
@@ -242,45 +396,50 @@ fn run(
     Ok(Some((status.success(), strip_ansi(&String::from_utf8_lossy(&out[start..])))))
 }
 
-/// Verifica un worktree: si tiene cambios, ejecuta `configured` (o lo que
-/// detecte) y guarda la salida en `log`. `None` si se canceló.
-pub fn check(
-    dir: &Path,
-    base: &str,
-    configured: Option<String>,
-    timeout: Duration,
-    log: PathBuf,
-    cancel: &AtomicBool,
-) -> Option<Report> {
+/// Verifica un worktree: si tiene cambios y se puede, ejecuta el comando
+/// configurado (o el que detecte) y guarda la salida. `None` si se canceló.
+pub fn check(job: &Job, cancel: &AtomicBool) -> Option<Report> {
     let start = Instant::now();
-    let skipped = |why: String, cmd: Option<String>| Report {
-        cmd,
-        outcome: Outcome::Skipped(why),
-        took: start.elapsed(),
-        log: None,
+    let done = |outcome: Outcome, cmd: Option<String>| {
+        Some(Report { cmd, outcome, took: start.elapsed(), log: None, network: job.network })
     };
-    if crate::worktree::diff(dir, base).is_ok_and(|f| f.is_empty()) {
-        return Some(skipped("Sin cambios que verificar".into(), None));
-    }
-    let cmd = match configured {
-        Some(c) => c,
-        None => match detect(dir) {
+    let skip = |why: String, cmd: Option<String>| done(Outcome::Skipped(why), cmd);
+    let files = match crate::worktree::diff(&job.dir, &job.base) {
+        Ok(f) if f.is_empty() => return skip("Sin cambios que verificar".into(), None),
+        Ok(f) => f,
+        // Sin saber qué ha cambiado, no se ejecuta nada.
+        Err(e) => return skip(format!("No se puede leer el diff: {e}"), None),
+    };
+    let cmd = match &job.configured {
+        Some(c) => c.clone(),
+        None => match detect(&job.dir) {
             Ok(c) => c,
-            Err(why) => return Some(skipped(why, None)),
+            Err(why) => return skip(why, None),
         },
     };
-    let (ok, output) = match run(dir, &cmd, timeout, cancel) {
+    if let Start::Auto { enabled } = job.start {
+        if let Some(f) = files.iter().find(|f| is_sensitive(&f.path, &cmd)) {
+            let name = f.path.trim_matches('"').rsplit('/').next().unwrap_or_default().to_string();
+            return done(Outcome::Ask(Ask::Touched(name)), None);
+        }
+        if !enabled {
+            return done(Outcome::Ask(Ask::Enable), None);
+        }
+    }
+    let (ok, output) = match run(job, &cmd, cancel) {
         Ok(Some(r)) => r,
         Ok(None) => return None,
-        Err(e) => return Some(skipped(e, Some(cmd))),
+        Err(e) => return skip(e, Some(cmd)),
     };
+    let log = &job.log;
     let saved = log.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok())
-        && std::fs::write(&log, format!("$ {cmd}\n\n{output}")).is_ok();
+        && std::fs::write(log, format!("$ {cmd}\n\n{output}")).is_ok();
     Some(Report {
         outcome: summarize(&output, ok),
         cmd: Some(cmd),
         took: start.elapsed(),
-        log: saved.then_some(log),
+        log: saved.then(|| log.clone()),
+        network: job.network,
     })
 }
 
@@ -288,17 +447,16 @@ pub fn check(
 pub fn fix_prompt(r: &Report) -> Option<String> {
     let Outcome::Failed(what) = &r.outcome else { return None };
     let cmd = r.cmd.as_deref().unwrap_or("los tests");
-    Some(match &r.log {
-        Some(log) => format!(
-            "He ejecutado `{cmd}` en este worktree y falla ({}). La salida completa está en {}. Arréglalo y comprueba que pasa.",
-            what.to_lowercase(),
-            log.display()
-        ),
-        None => format!(
-            "He ejecutado `{cmd}` en este worktree y falla ({}). Arréglalo y comprueba que pasa.",
-            what.to_lowercase()
-        ),
-    })
+    let log = match &r.log {
+        Some(log) => format!(" La salida completa está en {}.", log.display()),
+        None => String::new(),
+    };
+    let net = if r.network { "" } else { " y sin red" };
+    Some(format!(
+        "He ejecutado `{cmd}` en este worktree, en un sandbox que solo deja escribir en él{net}, y falla ({}).{log} \
+         Arréglalo y comprueba que pasa; si el fallo se debe solo al sandbox, dímelo y no cambies código.",
+        what.to_lowercase()
+    ))
 }
 
 /// Una verificación en curso o terminada, por panel.
@@ -374,16 +532,94 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
+    /// Repositorio nuevo con un Makefile y un archivo cambiado.
+    fn repo(name: &str, test: &str) -> (PathBuf, Job) {
+        let dir = std::env::temp_dir().join(format!("forge-vjob-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success();
+            assert!(ok, "git {args:?}");
+        };
+        std::fs::write(dir.join("Makefile"), format!("test:\n\t{test}\n")).unwrap();
+        std::fs::write(dir.join("a.txt"), "uno\n").unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "x"]);
+        let job = Job {
+            dir: dir.clone(),
+            repo: dir.clone(),
+            base: "HEAD".into(),
+            configured: None,
+            timeout: Duration::from_secs(30),
+            network: false,
+            log: dir.join("log.txt"),
+            start: Start::Manual,
+        };
+        (dir, job)
+    }
+
     #[test]
-    fn runs_and_cancels() {
-        let dir = std::env::temp_dir();
+    fn asks_before_running() {
+        let (dir, mut job) = repo("ask", "touch ejecutado");
         let no = AtomicBool::new(false);
-        let (ok, out) =
-            run(&dir, "echo uno; echo dos >&2; false", Duration::from_secs(20), &no).unwrap().unwrap();
-        assert!(!ok);
-        assert!(out.contains("uno") && out.contains("dos"));
+        let outcome = |job: &Job| check(job, &no).unwrap().outcome;
+        assert_eq!(outcome(&job), Outcome::Skipped("Sin cambios que verificar".into()));
+        std::fs::write(dir.join("a.txt"), "dos\n").unwrap();
+        job.start = Start::Auto { enabled: false };
+        assert_eq!(outcome(&job), Outcome::Ask(Ask::Enable));
+        // Activada, pero el agente ha tocado el Makefile.
+        std::fs::write(dir.join("Makefile"), "test:\n\ttouch ejecutado\n\ttrue\n").unwrap();
+        job.start = Start::Auto { enabled: true };
+        assert_eq!(outcome(&job), Outcome::Ask(Ask::Touched("Makefile".into())));
+        // Sin poder leer el diff no se ejecuta nada, ni a mano.
+        job.start = Start::Manual;
+        job.base = "no-existe".into();
+        assert!(matches!(outcome(&job), Outcome::Skipped(_)));
+        assert!(!dir.join("ejecutado").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn runs_sandboxed_and_cancels() {
+        // Dentro de otro sandbox no se puede crear uno.
+        if std::env::var_os("FORGE_VERIFY").is_some() {
+            return;
+        }
+        let (dir, mut job) = repo("run", "echo dentro; echo x > ../forge-vjob-fuera-$$$$");
+        std::fs::write(dir.join("a.txt"), "dos\n").unwrap();
+        job.start = Start::Auto { enabled: true };
+        let no = AtomicBool::new(false);
+        let r = check(&job, &no).unwrap();
+        assert!(matches!(r.outcome, Outcome::Failed(_)), "{r:?}");
+        let log = std::fs::read_to_string(r.log.unwrap()).unwrap();
+        assert!(log.contains("dentro") && log.contains("not permitted"), "{log}");
+        let (ok, out) = run(&job, "echo uno; echo dos >&2; false", &no).unwrap().unwrap();
+        assert!(!ok && out.contains("uno") && out.contains("dos"));
         let yes = AtomicBool::new(true);
-        assert!(run(&dir, "sleep 5", Duration::from_secs(20), &yes).unwrap().is_none());
+        assert!(run(&job, "sleep 5", &yes).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(target_dir(&job.repo).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sensitive_files() {
+        for f in [
+            "Makefile",
+            "sub/build.rs",
+            ".cargo/config.toml",
+            "web/package.json",
+            "jest.config.js",
+            "\"a/Cargo.toml\"",
+        ] {
+            assert!(is_sensitive(f, "cargo test"), "{f}");
+        }
+        for f in ["src/main.rs", "README.md", "tests/a.rs"] {
+            assert!(!is_sensitive(f, "cargo test"), "{f}");
+        }
+        assert!(is_sensitive("scripts/ci.sh", "./scripts/ci.sh --rapido"));
+        assert!(listed("/a/b\n/c\n", Path::new("/c")));
+        assert!(!listed("/a/b\n", Path::new("/a")));
     }
 
     #[test]
@@ -393,6 +629,7 @@ mod tests {
             outcome: Outcome::Failed("2 tests fallan".into()),
             took: Duration::ZERO,
             log: Some("/tmp/v.log".into()),
+            network: false,
         };
         let p = fix_prompt(&r).unwrap();
         assert!(p.contains("`cargo test`") && p.contains("2 tests fallan") && p.contains("/tmp/v.log"));

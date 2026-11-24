@@ -16,6 +16,7 @@ mod panes;
 mod query;
 mod rects;
 mod review;
+mod sandbox;
 mod ui;
 mod usage;
 mod verify;
@@ -952,6 +953,7 @@ impl App {
             | Hit::BoardAnswer(..)
             | Hit::BoardVerify(_)
             | Hit::BoardFix(_)
+            | Hit::BoardVerifyEnable(_)
             | Hit::BoardProject
             | Hit::BoardLaunch => self.board_click(hit),
         }
