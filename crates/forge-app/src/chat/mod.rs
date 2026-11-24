@@ -83,10 +83,8 @@ pub enum ChatHit {
     McpApprove(u16),
     McpRemove(u16),
     McpSignIn(u16),
-    /// Clave de un servidor, atajos de GitHub y campo en que se escribe.
+    /// Clave de un servidor, y campo en que se escribe.
     McpKey(u16),
-    McpGitHub(bool),
-    McpGitHubKey,
     McpField(bool),
     McpSignOut(u16),
     McpOpen(u16),
@@ -2047,7 +2045,6 @@ impl App {
             "!mcp" => self.chat_click(ChatHit::Mcp),
             "!mcpadd" => self.chat_click(ChatHit::McpAdd),
             "!mcpok" => self.chat_click(ChatHit::McpAddOk),
-            "!github" => self.chat_click(ChatHit::McpGitHub(false)),
             "!key" => self.chat_click(ChatHit::McpKey(0)),
             "!signin" => self.chat_click(ChatHit::McpSignIn(0)),
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),

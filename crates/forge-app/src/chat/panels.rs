@@ -8,7 +8,7 @@ use forge_agent::oauth::{LOGIN, signed_in};
 
 use super::draw::{Env, primary, secondary, window, wrap};
 use super::edit::Editor;
-use super::extend::{GITHUB, McpForm, McpPanel, McpStatus, SkillForm, mcp_label, skill_exists};
+use super::extend::{McpForm, McpPanel, McpStatus, SkillForm, mcp_label, skill_exists};
 use super::{ChatHit, Chats};
 use crate::ui::{self, Align, Area, DIM, EMBER, Font, HOT, Hit, Rgb, TEXT, Ui};
 
@@ -238,33 +238,14 @@ pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env
         ui.hit(b, Hit::Chat(ChatHit::McpField(false)));
         y += ui.s(50.0);
     }
-    // Atajos, mientras no hay nada escrito.
-    if f.parsed.is_empty() && f.text.is_empty() {
-        ui.text("O elige:", x, y + ui.s(5.0), ui.s(60.0), 12.0, DIM, false, Align::Left);
-        let l = x + ui.s(60.0);
-        let r = l + ui.s(170.0);
-        chip(ui, "GitHub · solo leer", r, y, EMBER, ChatHit::McpGitHub(false), env);
-        chip(ui, "GitHub · leer y escribir", r + ui.s(190.0), y, EMBER, ChatHit::McpGitHub(true), env);
-        y += ui.s(38.0);
-    }
     if wants {
         let b = Area::new(x, y, w, ui.s(40.0));
-        field(
-            ui,
-            b,
-            &f.key,
-            "Clave del servicio (déjalo vacío si inicia sesión o no la pide)",
-            f.on_key,
-            true,
-        );
+        field(ui, b, &f.key, "Clave, si la pide (opcional)", f.on_key, true);
         ui.hit(b, Hit::Chat(ChatHit::McpField(true)));
         y += ui.s(50.0);
-        if f.parsed[0].1.url.as_deref() == Some(GITHUB) {
-            let t = "Da a la clave solo tus repositorios y permisos de Contents, Issues y Pull requests.";
-            ui.text(t, x, y + ui.s(4.0), w - ui.s(160.0), 11.5, DIM, false, Align::Left);
-            chip(ui, "Crear la clave en GitHub", x + w, y, EMBER, ChatHit::McpGitHubKey, env);
-            y += ui.s(36.0);
-        }
+        let t = "Si el servicio no deja iniciar sesión desde aquí, créale una clave en su web y pégala.";
+        ui.text(t, x, y - ui.s(2.0), w, 11.5, FAINT, false, Align::Left);
+        y += ui.s(26.0);
     }
     if let Some(e) = &f.error {
         ui.text(e, x, y, w, 12.5, ui::RED, false, Align::Left);

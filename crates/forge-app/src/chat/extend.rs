@@ -92,19 +92,6 @@ impl McpForm {
     }
 }
 
-/// Servidor de GitHub: solo lo habitual, para no llenar el contexto.
-pub const GITHUB: &str = "https://api.githubcopilot.com/mcp/";
-const GITHUB_KEYS: &str = "https://github.com/settings/personal-access-tokens/new";
-
-/// Su configuración. Con `write`, también puede cambiar cosas.
-pub fn github(write: bool) -> String {
-    let mut headers = BTreeMap::from([("X-MCP-Toolsets", "repos,issues,pull_requests")]);
-    if !write {
-        headers.insert("X-MCP-Readonly", "true");
-    }
-    json!({"mcpServers": {"github": {"url": GITHUB, "headers": headers}}}).to_string()
-}
-
 /// Instalar habilidades.
 #[derive(Default)]
 pub struct SkillForm {
@@ -418,15 +405,6 @@ impl App {
         self.chats.popup = Popup::McpForm(Box::new(f));
     }
 
-    /// Rellena el formulario con el servidor de GitHub.
-    fn github_mcp(&mut self, write: bool) {
-        self.chats.popup = Popup::McpForm(Box::default());
-        self.mcp_text(&github(write));
-        if let Popup::McpForm(f) = &mut self.chats.popup {
-            f.on_key = true;
-        }
-    }
-
     /// Texto escrito o pegado en el formulario de MCP.
     pub(super) fn mcp_text(&mut self, t: &str) {
         let Popup::McpForm(f) = &mut self.chats.popup else { return };
@@ -578,12 +556,6 @@ impl App {
                 }
             }
             ChatHit::McpKey(i) => self.key_mcp(i as usize),
-            ChatHit::McpGitHub(write) => self.github_mcp(write),
-            ChatHit::McpGitHubKey => {
-                if let Err(e) = oauth::open_browser(GITHUB_KEYS) {
-                    self.toast(e);
-                }
-            }
             ChatHit::McpField(key) => {
                 if let Popup::McpForm(f) = &mut self.chats.popup {
                     f.on_key = key;
@@ -641,16 +613,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_is_ready_to_use() {
-        let v = mcp::parse(&github(false)).unwrap();
-        assert_eq!((v.len(), v[0].0.as_str()), (1, "github"));
-        assert_eq!(v[0].1.headers["X-MCP-Readonly"], "true");
-        assert!(!mcp::parse(&github(true)).unwrap()[0].1.headers.contains_key("X-MCP-Readonly"));
-        let f = McpForm { parsed: v, ..McpForm::default() };
-        assert!(f.wants_key());
-        let mut f = f;
-        f.parsed[0].1.headers.insert("authorization".into(), "Bearer x".into());
-        assert!(!f.wants_key());
+    fn asks_for_a_key_only_when_it_makes_sense() {
+        let form = |t: &str| McpForm { parsed: mcp::parse(t).unwrap(), ..McpForm::default() };
+        assert!(form("https://a.com/mcp").wants_key());
+        assert!(!form("npx -y algo").wants_key());
+        assert!(!form(r#"{"url": "https://a.com", "headers": {"authorization": "Bearer x"}}"#).wants_key());
+        assert!(
+            !form(r#"{"mcpServers": {"a": {"url": "https://a"}, "b": {"url": "https://b"}}}"#).wants_key()
+        );
     }
 
     #[test]

@@ -293,11 +293,9 @@ JSON de `mcpServers` que dan en su web, la orden con la que se lanza
   permisos. forge enseña la orden entera antes de arrancarlo.
 - **Remotos** (*Streamable HTTP*; el transporte antiguo, SSE, no): **lo que el
   modelo les mande sale de tu Mac**. Si piden cuenta, **Iniciar sesión** abre tu
-  navegador; también puedes **poner una clave**. Fuera de tu red, solo `https://`.
-- **GitHub**: en *Añadir* hay un atajo, para solo leer o también escribir. GitHub no
-  deja que forge inicie sesión por ti, así que hace falta una clave: *Crear la clave
-  en GitHub* abre su página (elige tus repositorios y permisos de *Contents*,
-  *Issues* y *Pull requests*), y la pegas en forge.
+  navegador. Si el servicio no deja iniciar sesión desde otros programas, créale
+  una clave en su web y pégala en el campo *Clave*. Fuera de tu red, solo
+  `https://`.
 - **Lo que apruebas es lo que se usa**: si la orden, la dirección o las cabeceras
   cambian en el archivo, vuelve a pedirte permiso. El `.mcp.json` de un proyecto no
   se carga solo; *Traer del proyecto* lo enseña para que lo revises.
