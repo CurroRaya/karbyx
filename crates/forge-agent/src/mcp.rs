@@ -165,7 +165,7 @@ fn remote_name(url: &str) -> Result<String, String> {
 }
 
 /// Nombre usable como parte del de una herramienta.
-fn name_ok(n: &str) -> Result<String, String> {
+pub(crate) fn name_ok(n: &str) -> Result<String, String> {
     let s: String = n
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
@@ -368,6 +368,11 @@ fn user_path() -> &'static str {
             .or_else(|| std::env::var("PATH").ok())
             .unwrap_or_else(|| "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".into())
     })
+}
+
+/// ¿Está instalado un programa, en el `PATH` del usuario?
+pub fn installed(program: &str) -> bool {
+    user_path().split(':').any(|d| !d.is_empty() && Path::new(d).join(program).is_file())
 }
 
 impl Client {

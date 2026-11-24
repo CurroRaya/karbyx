@@ -13,6 +13,7 @@ use forge_agent::install::{self, Bundle, From};
 use forge_agent::know::Know;
 use forge_agent::mcp::{self, Client, Config, Tool};
 use forge_agent::oauth;
+use forge_agent::registry::{self, Entry};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -89,6 +90,60 @@ impl McpForm {
             [(_, c)] => c.url.is_some() && !c.headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")),
             _ => false,
         }
+    }
+}
+
+/// Buscador de servidores MCP.
+#[derive(Default)]
+pub struct McpSearch {
+    pub query: Editor,
+    pub busy: bool,
+    pub error: Option<String>,
+    pub results: Option<Vec<Entry>>,
+    /// Ficha abierta, forma de conectar y datos que pide.
+    pub sel: Option<usize>,
+    pub choice: usize,
+    pub values: Vec<Editor>,
+    pub focus: usize,
+    pub scroll: f32,
+    pub max: f32,
+    /// Programas que hay en este Mac (se mira al buscar).
+    pub programs: Vec<&'static str>,
+}
+
+impl McpSearch {
+    pub fn installed(&self, p: &str) -> bool {
+        self.programs.contains(&p)
+    }
+
+    pub fn entry(&self) -> Option<&Entry> {
+        self.results.as_ref()?.get(self.sel?)
+    }
+
+    pub fn current(&self) -> Option<&registry::Choice> {
+        self.entry()?.choices.get(self.choice)
+    }
+
+    /// Prepara los datos de la forma de conectar elegida.
+    fn reset(&mut self) {
+        let defaults: Vec<String> =
+            self.current().map(|c| c.inputs.iter().map(|i| i.default.clone()).collect()).unwrap_or_default();
+        self.values = defaults
+            .into_iter()
+            .map(|d| {
+                let mut e = Editor::default();
+                if !d.is_empty() {
+                    e.set(d);
+                }
+                e
+            })
+            .collect();
+        (self.focus, self.scroll, self.error) = (0, 0.0, None);
+    }
+
+    /// Lo que se escribe ahora.
+    pub fn editor(&mut self) -> Option<&mut Editor> {
+        if self.sel.is_some() { self.values.get_mut(self.focus) } else { Some(&mut self.query) }
     }
 }
 
@@ -437,6 +492,72 @@ impl App {
         };
     }
 
+    // ---------- buscador ----------
+
+    fn search_mcp(&mut self) {
+        let Popup::McpSearch(f) = &mut self.chats.popup else { return };
+        if f.busy || f.query.text().trim().is_empty() {
+            return;
+        }
+        (f.busy, f.error, f.results, f.sel, f.scroll) = (true, None, None, None, 0.0);
+        let (q, proxy) = (f.query.text().to_string(), self.proxy.clone());
+        std::thread::spawn(move || {
+            let r = registry::search(&q);
+            let programs = ["npx", "uvx", "docker"].into_iter().filter(|p| mcp::installed(p)).collect();
+            let _ = proxy.send_event(UserEvent::McpFound(q, programs, r));
+        });
+    }
+
+    pub(crate) fn on_mcp_found(
+        &mut self,
+        q: String,
+        programs: Vec<&'static str>,
+        r: Result<Vec<Entry>, String>,
+    ) {
+        if let Popup::McpSearch(f) = &mut self.chats.popup
+            && f.busy
+            && f.query.text() == q
+        {
+            f.busy = false;
+            f.programs = programs;
+            match r {
+                Ok(v) => f.results = Some(v),
+                Err(e) => f.error = Some(e),
+            }
+        }
+        self.redraw();
+    }
+
+    /// Con los datos puestos, se pasa a revisar como cualquier otro.
+    fn review_found(&mut self) {
+        let Popup::McpSearch(f) = &mut self.chats.popup else { return };
+        let values: Vec<String> = f.values.iter().map(|e| e.text().to_string()).collect();
+        let built = match (f.entry(), f.current()) {
+            (Some(e), Some(c)) => c.build(&values).map(|c| (e.name.clone(), c)),
+            _ => return,
+        };
+        match built {
+            Ok((_, c)) if review_len(&c) > 900 => {
+                f.error = Some("La orden es demasiado larga para revisarla aquí".into());
+            }
+            Ok(new) => {
+                let f = McpForm { parsed: vec![new], fixed: true, ..McpForm::default() };
+                self.chats.popup = Popup::McpForm(Box::new(f));
+            }
+            Err(e) => f.error = Some(e),
+        }
+    }
+
+    /// Texto escrito en el buscador.
+    pub(super) fn search_text(&mut self, t: &str) {
+        let Popup::McpSearch(f) = &mut self.chats.popup else { return };
+        let t = t.replace(['\n', '\r', '\t'], "");
+        f.error = None;
+        if let Some(e) = f.editor() {
+            e.insert(&t);
+        }
+    }
+
     // ---------- habilidades ----------
 
     /// Busca habilidades en lo que se escribió.
@@ -502,6 +623,8 @@ impl App {
     pub(super) fn extend_enter(&mut self) -> bool {
         match &self.chats.popup {
             Popup::McpForm(_) => self.add_mcp(),
+            Popup::McpSearch(f) if f.sel.is_some() => self.review_found(),
+            Popup::McpSearch(_) => self.search_mcp(),
             Popup::Skill(f) if f.bundle.is_none() => self.fetch_skills(),
             Popup::Skill(_) => {}
             _ => return false,
@@ -513,6 +636,8 @@ impl App {
     pub(super) fn extend_back(&mut self) -> bool {
         match &mut self.chats.popup {
             Popup::McpForm(_) => self.open_mcp(),
+            Popup::McpSearch(f) if f.sel.is_some() => (f.sel, f.scroll, f.error) = (None, 0.0, None),
+            Popup::McpSearch(_) => self.open_mcp(),
             Popup::Skill(f) if f.sel.is_some() && f.bundle.as_ref().is_some_and(|b| b.found.len() > 1) => {
                 (f.sel, f.scroll) = (None, 0.0);
             }
@@ -528,6 +653,7 @@ impl App {
     pub(super) fn extend_wheel(&mut self, px: f32) -> bool {
         let (scroll, max) = match &mut self.chats.popup {
             Popup::Mcp(p) => (&mut p.scroll, p.max),
+            Popup::McpSearch(f) => (&mut f.scroll, f.max),
             Popup::Skill(f) => (&mut f.scroll, f.max),
             _ => return false,
         };
@@ -553,6 +679,43 @@ impl App {
                 let name = self.chats.mcp.get(i as usize).map(|v| (v.name.clone(), v.status.clone()));
                 if let Some((n, McpStatus::Unknown | McpStatus::Failed(_))) = name {
                     self.probe_mcp(&n);
+                }
+            }
+            ChatHit::McpSearch => self.chats.popup = Popup::McpSearch(Box::default()),
+            ChatHit::McpSearchGo => self.search_mcp(),
+            ChatHit::McpFound(i) => {
+                if let Popup::McpSearch(f) = &mut self.chats.popup {
+                    (f.sel, f.choice) = (Some(i as usize), 0);
+                    f.reset();
+                }
+            }
+            ChatHit::McpChoice(i) => {
+                if let Popup::McpSearch(f) = &mut self.chats.popup {
+                    f.choice = i as usize;
+                    f.reset();
+                }
+            }
+            ChatHit::McpInput(i) => {
+                if let Popup::McpSearch(f) = &mut self.chats.popup {
+                    f.focus = i as usize;
+                }
+            }
+            ChatHit::McpOption(i, j) => {
+                if let Popup::McpSearch(f) = &mut self.chats.popup {
+                    let v =
+                        f.current().and_then(|c| c.inputs.get(i as usize)?.choices.get(j as usize).cloned());
+                    if let (Some(v), Some(e)) = (v, f.values.get_mut(i as usize)) {
+                        e.set(v);
+                    }
+                }
+            }
+            ChatHit::McpReview => self.review_found(),
+            ChatHit::McpRepo => {
+                if let Popup::McpSearch(f) = &self.chats.popup
+                    && let Some(u) = f.entry().and_then(|e| e.repo.clone())
+                    && let Err(e) = oauth::open_browser(&u)
+                {
+                    self.toast(e);
                 }
             }
             ChatHit::McpKey(i) => self.key_mcp(i as usize),

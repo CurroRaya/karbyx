@@ -13,6 +13,7 @@ pub mod install;
 pub mod know;
 pub mod mcp;
 pub mod oauth;
+pub mod registry;
 mod remote;
 pub mod sandbox;
 pub mod tools;

@@ -1041,6 +1041,7 @@ pub fn draw_chat(
         Popup::Memory(v) => memory_panel(over, area, v, env),
         Popup::Mcp(p) => grew = Some(panels::mcp_panel(over, area, chats, p, env)),
         Popup::McpForm(f) => panels::mcp_form(over, area, chats, f, env),
+        Popup::McpSearch(f) => grew = Some(panels::mcp_search(over, area, f, env)),
         Popup::Skill(f) => {
             if let Some(c) = chats.current() {
                 grew = Some(panels::skill_form(over, area, f, &c.know(), env));
@@ -1051,6 +1052,7 @@ pub fn draw_chat(
     // Cuánto se puede desplazar el panel.
     match (&mut chats.popup, grew) {
         (Popup::Mcp(p), Some(m)) => (p.max, p.scroll) = (m, p.scroll.min(m)),
+        (Popup::McpSearch(f), Some(m)) => (f.max, f.scroll) = (m, f.scroll.min(m)),
         (Popup::Skill(f), Some(m)) => (f.max, f.scroll) = (m, f.scroll.min(m)),
         _ => {}
     }

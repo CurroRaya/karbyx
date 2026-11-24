@@ -285,9 +285,17 @@ siguiente mensaje).
 #### Servidores MCP
 
 Tu modelo puede usar herramientas de otros programas con
-[MCP](https://modelcontextprotocol.io). En **Servidores MCP › Añadir**, pega el
-JSON de `mcpServers` que dan en su web, la orden con la que se lanza
-(`npx -y paquete`) o su dirección (`https://…`).
+[MCP](https://modelcontextprotocol.io). En **Servidores MCP**:
+
+- **Buscar…** consulta el [registro oficial](https://registry.modelcontextprotocol.io)
+  y pide solo lo que cada servidor necesita (claves, opciones), con la explicación de
+  su autor. Lo que escribes se envía a esa web al pulsar ↵. El registro comprueba
+  **quién** publica (su dominio o su cuenta de GitHub), no que sea de fiar: fíjate en
+  el autor.
+- **Añadir a mano…** acepta el JSON de `mcpServers` que dan en su web, la orden con
+  la que se lanza (`npx -y paquete`) o su dirección (`https://…`).
+
+Cómo se tratan:
 
 - **En tu Mac**: es un programa que se ejecuta fuera del sandbox y con tus
   permisos. forge enseña la orden entera antes de arrancarlo.

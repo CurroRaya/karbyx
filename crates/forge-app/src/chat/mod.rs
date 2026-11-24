@@ -30,7 +30,7 @@ use crate::ui::{Area, Hit};
 use crate::worktree::Worktree;
 use crate::{App, PaneKind, Spawn, UserEvent};
 use edit::{Editor, Move};
-use extend::{McpForm, McpPanel, McpView, SkillForm};
+use extend::{McpForm, McpPanel, McpSearch, McpView, SkillForm};
 use forge_ai::Provider;
 use store::{Saved, Stored, StoredItem};
 
@@ -83,6 +83,16 @@ pub enum ChatHit {
     McpApprove(u16),
     McpRemove(u16),
     McpSignIn(u16),
+    /// Buscador: abrirlo, buscar, ficha, forma de conectar, dato, opción del
+    /// dato, revisar y ver su código.
+    McpSearch,
+    McpSearchGo,
+    McpFound(u16),
+    McpChoice(u16),
+    McpInput(u16),
+    McpOption(u16, u16),
+    McpReview,
+    McpRepo,
     /// Clave de un servidor, y campo en que se escribe.
     McpKey(u16),
     McpField(bool),
@@ -604,6 +614,7 @@ pub enum Popup {
     Memory(Box<MemoryView>),
     Mcp(Box<McpPanel>),
     McpForm(Box<McpForm>),
+    McpSearch(Box<McpSearch>),
     Skill(Box<SkillForm>),
     Form(Box<Form>),
 }
@@ -1597,6 +1608,7 @@ impl App {
                 }
             }
             Popup::McpForm(_) => self.mcp_text(t),
+            Popup::McpSearch(_) => self.search_text(t),
             Popup::Skill(f) => {
                 if f.bundle.is_none() && !f.busy {
                     f.url.insert(&t.replace(['\n', '\r', '\t'], ""));
@@ -1792,6 +1804,12 @@ impl App {
                     self.chat_stop();
                 }
             }
+            NamedKey::Tab if matches!(self.chats.popup, Popup::McpSearch(_)) => {
+                if let Popup::McpSearch(f) = &mut self.chats.popup {
+                    let n = f.values.len().max(1);
+                    f.focus = (f.focus + if shift { n - 1 } else { 1 }) % n;
+                }
+            }
             NamedKey::Tab if matches!(self.chats.popup, Popup::McpForm(_)) => {
                 if let Popup::McpForm(f) = &mut self.chats.popup {
                     f.on_key = !f.on_key && f.wants_key();
@@ -1839,6 +1857,7 @@ impl App {
         match &mut self.chats.popup {
             Popup::Form(f) => Some(if f.focus == 0 { &mut f.url } else { &mut f.key }),
             Popup::McpForm(f) => Some(if f.on_key { &mut f.key } else { &mut f.text }),
+            Popup::McpSearch(f) => f.editor(),
             Popup::Skill(f) => Some(&mut f.url),
             _ => self.chats.list.get_mut(self.chats.cur).map(|c| &mut c.input),
         }
@@ -1846,7 +1865,12 @@ impl App {
 
     fn chat_vertical(&mut self, up: bool, cmd: bool, shift: bool) {
         let to_end = if up { Move::Start } else { Move::End };
-        if cmd || matches!(self.chats.popup, Popup::Form(_) | Popup::McpForm(_) | Popup::Skill(_)) {
+        if cmd
+            || matches!(
+                self.chats.popup,
+                Popup::Form(_) | Popup::McpForm(_) | Popup::McpSearch(_) | Popup::Skill(_)
+            )
+        {
             if let Some(e) = self.chat_editor() {
                 e.go(to_end, shift);
             }
@@ -2046,6 +2070,15 @@ impl App {
             "!mcpadd" => self.chat_click(ChatHit::McpAdd),
             "!mcpok" => self.chat_click(ChatHit::McpAddOk),
             "!key" => self.chat_click(ChatHit::McpKey(0)),
+            "!search" => self.chat_click(ChatHit::McpSearch),
+            "!go" => self.chat_click(ChatHit::McpSearchGo),
+            t if t.starts_with("!found ") => {
+                self.chat_click(ChatHit::McpFound(t[7..].parse().unwrap_or(0)));
+            }
+            t if t.starts_with("!choice ") => {
+                self.chat_click(ChatHit::McpChoice(t[8..].parse().unwrap_or(0)));
+            }
+            "!review2" => self.chat_click(ChatHit::McpReview),
             "!signin" => self.chat_click(ChatHit::McpSignIn(0)),
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
             "!skill" => self.chat_click(ChatHit::SkillAdd),

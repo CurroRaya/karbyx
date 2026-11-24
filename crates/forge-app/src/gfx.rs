@@ -550,7 +550,7 @@ impl Gfx {
                 left: l.area.x,
                 top: l.area.y,
                 scale: 1.0,
-                bounds: bounds(l.area),
+                bounds: bounds(l.clip.map_or(l.area, |c| c.intersect(l.area))),
                 default_color,
                 custom_glyphs: &[],
             })

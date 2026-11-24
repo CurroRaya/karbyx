@@ -5,10 +5,11 @@
 
 use forge_agent::know::Know;
 use forge_agent::oauth::{LOGIN, signed_in};
+use forge_agent::registry::Entry;
 
 use super::draw::{Env, primary, secondary, window, wrap};
 use super::edit::Editor;
-use super::extend::{McpForm, McpPanel, McpStatus, SkillForm, mcp_label, skill_exists};
+use super::extend::{McpForm, McpPanel, McpSearch, McpStatus, SkillForm, mcp_label, skill_exists};
 use super::{ChatHit, Chats};
 use crate::ui::{self, Align, Area, DIM, EMBER, Font, HOT, Hit, Rgb, TEXT, Ui};
 
@@ -64,7 +65,7 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
     let about =
         "Herramientas de otros programas para tu modelo: en tu Mac (fuera del sandbox) o en internet.";
     let (x, w, top, a) = window(ui, screen, 760.0, 600.0, "Servidores MCP", about);
-    let bottom = a.bottom() - ui.s(66.0);
+    let bottom = a.bottom() - ui.s(84.0);
     let view = Area::new(x - ui.s(4.0), top, w + ui.s(8.0), bottom - top);
     let mut y = top - p.scroll;
     ui.clip = Some(view);
@@ -74,8 +75,8 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
     } else if chats.mcp.is_empty() {
         for t in [
             "Todavía no hay ninguno.",
-            "Pega la configuración que dan en su web («mcpServers»), la orden o la dirección,",
-            "por ejemplo: npx -y @modelcontextprotocol/server-everything",
+            "Busca uno por su nombre, o añádelo a mano con la configuración que den en su web,",
+            "la orden con la que se lanza o su dirección.",
         ] {
             ui.text(t, x, y, w, 12.5, FAINT, false, Align::Left);
             y += ui.s(24.0);
@@ -217,18 +218,23 @@ pub fn mcp_panel(ui: &mut Ui, screen: Area, chats: &Chats, p: &McpPanel, env: &E
     ui.clip = None;
     let max = (y + p.scroll - top - view.h).max(0.0);
     let by = a.bottom() - ui.s(52.0);
-    let r = primary(ui, "Añadir…", x + w, by, ui.s(110.0), ChatHit::McpAdd, env) - ui.s(8.0);
+    let r = primary(ui, "Buscar…", x + w, by, ui.s(110.0), ChatHit::McpSearch, env) - ui.s(8.0);
+    let r = secondary(ui, "Añadir a mano…", r, by, ui.s(136.0), ChatHit::McpAdd, env) - ui.s(8.0);
     let r = secondary(ui, "Traer del proyecto", r, by, ui.s(150.0), ChatHit::McpImport, env) - ui.s(8.0);
     secondary(ui, "Cerrar", r, by, ui.s(90.0), ChatHit::FormCancel, env);
     let hint = "Cuantas más herramientas, menos contexto para tu tarea.";
-    ui.text(hint, x, by + ui.s(9.0), ui.s(330.0), 11.5, FAINT, false, Align::Left);
+    ui.text(hint, x, by - ui.s(24.0), w, 11.5, FAINT, false, Align::Left);
     ui.hit(a, Hit::Chat(ChatHit::Inside));
     max
 }
 
 /// Añadir servidores.
 pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env) {
-    let about = "Pega el JSON de «mcpServers», la orden con la que se lanza o su dirección. Revísalo antes de aceptar.";
+    let about = if f.fixed {
+        "Esto es lo que se va a usar. Revísalo antes de aceptar."
+    } else {
+        "Pega el JSON de «mcpServers», la orden con la que se lanza o su dirección. Revísalo antes de aceptar."
+    };
     let (x, w, mut y, a) = window(ui, screen, 760.0, 600.0, "Añadir servidor MCP", about);
     let wants = f.wants_key();
     if !f.fixed {
@@ -297,6 +303,157 @@ pub fn mcp_form(ui: &mut Ui, screen: Area, chats: &Chats, f: &McpForm, env: &Env
     let r = primary(ui, "Añadir  ↵", x + w, by, ui.s(176.0), ChatHit::McpAddOk, env) - ui.s(8.0);
     secondary(ui, "Volver", r, by, ui.s(90.0), ChatHit::ExtendBack, env);
     ui.hit(a, Hit::Chat(ChatHit::Inside));
+}
+
+/// Buscador de servidores. Devuelve cuánto se puede desplazar.
+pub fn mcp_search(ui: &mut Ui, screen: Area, f: &McpSearch, env: &Env) -> f32 {
+    if let Some(e) = f.entry() {
+        return mcp_detail(ui, screen, f, e, env);
+    }
+    let about = "En el registro oficial de MCP. Lo que escribas se envía a su web al pulsar ↵.";
+    let (x, w, top, a) = window(ui, screen, 780.0, 640.0, "Buscar servidores MCP", about);
+    let go = ui.s(100.0);
+    let b = Area::new(x, top, w - go - ui.s(8.0), ui.s(40.0));
+    field(ui, b, &f.query, "github, notion, postgres…", true, false);
+    primary(ui, "Buscar ↵", x + w, top + ui.s(2.0), go, ChatHit::McpSearchGo, env);
+    let list = top + ui.s(54.0);
+    let by = a.bottom() - ui.s(52.0);
+    let view = Area::new(x, list, w, by - ui.s(34.0) - list);
+    let warn = "⚠ El registro comprueba quién publica, no que sea de fiar. Fíjate en el autor.";
+    ui.text(warn, x, by - ui.s(24.0), w, 11.5, HOT, false, Align::Left);
+    let msg = match (&f.error, &f.results, f.busy) {
+        (_, _, true) => Some(("Buscando…".to_string(), HOT)),
+        (Some(e), ..) => Some((e.clone(), ui::RED)),
+        (_, Some(r), _) if r.is_empty() => Some(("No hay ninguno con ese nombre.".into(), DIM)),
+        _ => None,
+    };
+    if let Some((t, c)) = msg {
+        ui.text(t, x, list + ui.s(6.0), w, 12.5, c, false, Align::Left);
+    }
+    let row = ui.s(58.0);
+    let mut y = list - f.scroll;
+    ui.clip = Some(view);
+    for (i, e) in f.results.iter().flatten().enumerate() {
+        let r = Area::new(x, y, w, row);
+        y += row;
+        if r.bottom() < view.y || r.y > view.bottom() {
+            continue;
+        }
+        let hit = ChatHit::McpFound(i as u16);
+        if env.hover == Some(hit) {
+            ui.round(r.intersect(view), ui::ACTIVE_BG, 1.0, 8.0);
+        }
+        let (px, ty) = (x + ui.s(12.0), r.y);
+        ui.text(&e.title, px, ty + ui.s(6.0), w * 0.55, 13.5, TEXT, true, Align::Left);
+        ui.text(&e.publisher, px, ty + ui.s(7.0), w - ui.s(24.0), 11.5, EMBER, false, Align::Right);
+        ui.text(&e.about, px, ty + ui.s(26.0), w - ui.s(200.0), 11.5, DIM, false, Align::Left);
+        let kinds: Vec<&str> = e.choices.iter().map(|c| c.label).collect();
+        let t = if kinds.is_empty() { "forge no puede usarlo".into() } else { kinds.join(" · ") };
+        ui.text(t, px, ty + ui.s(26.0), w - ui.s(24.0), 11.0, FAINT, false, Align::Right);
+        ui.hit(r, Hit::Chat(hit));
+    }
+    ui.clip = None;
+    secondary(ui, "Volver", x + w, by, ui.s(90.0), ChatHit::ExtendBack, env);
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
+    (y + f.scroll - list - view.h).max(0.0)
+}
+
+/// Ficha de un servidor: quién es, cómo se conecta y qué pide.
+fn mcp_detail(ui: &mut Ui, screen: Area, f: &McpSearch, e: &Entry, env: &Env) -> f32 {
+    let about = format!("{} · publicado por {}", e.id, e.publisher);
+    let (x, w, mut y, a) = window(ui, screen, 780.0, 640.0, &e.title, &about);
+    for l in wrap(&e.about, 108).iter().take(3) {
+        ui.text(l, x, y, w, 12.5, TEXT, false, Align::Left);
+        y += ui.s(19.0);
+    }
+    if e.repo.is_some() {
+        chip(ui, "Ver su código", x + w, a.y + ui.s(22.0), EMBER, ChatHit::McpRepo, env);
+    }
+    y += ui.s(12.0);
+    let by = a.bottom() - ui.s(52.0);
+    if e.choices.is_empty() {
+        let t = "Se publica de una forma que forge todavía no admite.";
+        ui.text(t, x, y, w, 12.5, HOT, false, Align::Left);
+    }
+    // Formas de conectarlo.
+    if e.choices.len() > 1 {
+        ui.text("Cómo:", x, y + ui.s(5.0), ui.s(60.0), 12.0, DIM, false, Align::Left);
+        let mut cx = x + ui.s(56.0);
+        for (i, c) in e.choices.iter().enumerate() {
+            let cw = ui.s(20.0) + c.label.chars().count() as f32 * ui.s(6.6);
+            let color = if i == f.choice { EMBER } else { DIM };
+            chip(ui, c.label, cx + cw, y, color, ChatHit::McpChoice(i as u16), env);
+            cx += cw + ui.s(8.0);
+        }
+        y += ui.s(36.0);
+    }
+    let view = Area::new(x, y, w, by - ui.s(32.0) - y);
+    let mut max = 0.0;
+    if let Some(c) = f.current() {
+        let mut iy = y - f.scroll;
+        ui.clip = Some(view);
+        if c.inputs.is_empty() {
+            ui.text("No pide ningún dato.", x, iy, w, 12.5, DIM, false, Align::Left);
+            iy += ui.s(24.0);
+        }
+        for (i, inp) in c.inputs.iter().enumerate() {
+            let star = if inp.required { " · obligatorio" } else { " · opcional" };
+            ui.text(format!("{}{star}", inp.label), x, iy, w, 12.0, TEXT, true, Align::Left);
+            iy += ui.s(19.0);
+            for l in wrap(&inp.about, 112).iter().take(2) {
+                ui.text(l, x, iy, w, 11.0, DIM, false, Align::Left);
+                iy += ui.s(16.0);
+            }
+            let n = i as u16;
+            if inp.choices.is_empty() {
+                let b = Area::new(x, iy + ui.s(2.0), w, ui.s(36.0));
+                // Los campos a medias no se pintan: los rectángulos no se recortan.
+                if b.y >= view.y
+                    && b.bottom() <= view.bottom()
+                    && let Some(ed) = f.values.get(i)
+                {
+                    field(ui, b, ed, "", f.focus == i, inp.secret);
+                    ui.hit(b, Hit::Chat(ChatHit::McpInput(n)));
+                }
+                iy += ui.s(50.0);
+            } else {
+                let cur = f.values.get(i).map(|e| e.text()).unwrap_or_default();
+                let mut cx = x;
+                for (j, o) in inp.choices.iter().enumerate() {
+                    let cw = ui.s(20.0) + o.chars().count() as f32 * ui.s(6.6);
+                    if cx + cw > x + w {
+                        cx = x;
+                        iy += ui.s(30.0);
+                    }
+                    if iy >= view.y && iy + ui.s(26.0) <= view.bottom() {
+                        let color = if o == cur { EMBER } else { DIM };
+                        chip(ui, o, cx + cw, iy + ui.s(2.0), color, ChatHit::McpOption(n, j as u16), env);
+                    }
+                    cx += cw + ui.s(6.0);
+                }
+                iy += ui.s(40.0);
+            }
+        }
+        ui.clip = None;
+        max = (iy + f.scroll - y - view.h).max(0.0);
+        let (t, color) = match (&f.error, c.needs) {
+            (Some(e), _) => (e.clone(), ui::RED),
+            (None, Some(p)) if !f.installed(p) => {
+                (format!("⚠ Necesita «{p}», que no está instalado en este Mac."), HOT)
+            }
+            (None, Some(p)) => {
+                (format!("Se lanza con «{p}», que lo descarga y lo ejecuta en tu Mac."), FAINT)
+            }
+            (None, None) => ("Está en internet: lo que el modelo le mande sale de tu Mac.".into(), FAINT),
+        };
+        ui.text(t, x, by - ui.s(24.0), w, 12.0, color, false, Align::Left);
+        let r = primary(ui, "Revisar  ↵", x + w, by, ui.s(120.0), ChatHit::McpReview, env) - ui.s(8.0);
+        secondary(ui, "Volver", r, by, ui.s(90.0), ChatHit::ExtendBack, env);
+    } else {
+        secondary(ui, "Volver", x + w, by, ui.s(90.0), ChatHit::ExtendBack, env);
+    }
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
+    max
 }
 
 /// Instalar habilidades. Devuelve cuánto se puede desplazar.
@@ -438,8 +595,11 @@ fn extra_text(c: &forge_agent::mcp::Config) -> String {
             .iter()
             .any(|s| k.to_uppercase().contains(s))
     };
-    let one =
-        |(k, v): (&String, &String)| if secret(k) { format!("{k}=•••") } else { format!("{k}={v}") };
+    // También una dirección con su contraseña dentro.
+    let login = |v: &str| v.contains("://") && v.contains('@');
+    let one = |(k, v): (&String, &String)| {
+        if secret(k) || login(v) { format!("{k}=•••") } else { format!("{k}={v}") }
+    };
     format!("{what}: {}", map.iter().map(one).collect::<Vec<_>>().join(" "))
 }
 
