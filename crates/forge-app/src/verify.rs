@@ -6,18 +6,12 @@
 //! plano, sin gastar tokens, y la tarjeta llega a «Para revisar» con el
 //! resultado. Si fallan, un botón le devuelve la salida al agente.
 
-use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::sandbox;
-
-/// Bytes de salida que se guardan (el final, que es donde están los fallos).
-const KEEP: usize = 512 * 1024;
+use forge_agent::exec::{self, End};
 
 /// Cómo acabó una verificación.
 #[derive(Debug, Clone, PartialEq)]
@@ -140,41 +134,6 @@ pub fn enable(repo: &Path) -> Result<(), String> {
     std::fs::write(&file, text).map_err(|e| e.to_string())
 }
 
-/// Caché de compilación del proyecto: su nombre y un resumen de su ruta, para
-/// que dos proyectos que se llamen igual no la compartan.
-fn target_dir(repo: &Path) -> Option<PathBuf> {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    repo.hash(&mut h);
-    let name = repo.file_name()?.to_string_lossy().into_owned();
-    Some(dirs::cache_dir()?.join("forge").join("target").join(format!("{name}-{:016x}", h.finish())))
-}
-
-/// Carpeta temporal propia de una ejecución; se borra al acabar.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Option<Self> {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
-        let d = dirs::cache_dir()?.join("forge").join("tmp").join(format!("v{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&d).ok()?;
-        Some(Self(d))
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// SDK de macOS: `xcrun` no funciona dentro del sandbox.
-fn sdk_root() -> Option<String> {
-    let out = Command::new("/usr/bin/xcrun").arg("--show-sdk-path").current_dir("/").output().ok()?;
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    (out.status.success() && !s.is_empty()).then_some(s)
-}
-
 /// Resultado completo, con la salida guardada en un archivo.
 #[derive(Debug, Clone)]
 pub struct Report {
@@ -223,39 +182,6 @@ pub fn detect(dir: &Path) -> Result<String, String> {
         return Ok("make test".into());
     }
     Err("Sin tests que ejecutar".into())
-}
-
-/// Quita las secuencias de escape ANSI (colores, cursor).
-pub fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        if c != '\x1b' {
-            if c != '\r' {
-                out.push(c);
-            }
-            continue;
-        }
-        match it.next() {
-            Some('[') => {
-                for c in it.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                while let Some(c) = it.next() {
-                    if c == '\x07' || (c == '\x1b' && it.peek() == Some(&'\\')) {
-                        it.next_if_eq(&'\\');
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Número justo antes de `word` en una línea («3 passed», «2 failed,»).
@@ -310,90 +236,27 @@ pub fn summarize(output: &str, ok: bool) -> Outcome {
     Outcome::Failed(if compile { "No compila".into() } else { "La verificación falla".into() })
 }
 
-/// Shell del usuario, con su PATH (como sus terminales).
-fn shell() -> String {
-    std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into())
-}
-
 /// Ejecuta `cmd` aislado en el worktree de `job`. Devuelve (éxito, salida)
 /// o `None` si se canceló.
 fn run(job: &Job, cmd: &str, cancel: &AtomicBool) -> Result<Option<(bool, String)>, String> {
-    let (dir, timeout) = (&job.dir, job.timeout);
-    let target = target_dir(&job.repo).ok_or("sin carpeta de caché")?;
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let tmp = TempDir::new().ok_or("sin carpeta temporal")?;
-    let dirs = sandbox::Dirs { worktree: dir.clone(), target: target.clone(), tmp: tmp.0.clone() };
-    let mut command = sandbox::command(&shell(), &dirs, job.network)?;
-    // -i -l: carga el PATH del usuario (rustup, nvm...) aunque forge se
-    // abriera desde el Finder. La salida de error va al mismo sitio.
-    command
-        .args(["-l", "-i", "-c", &format!("exec 2>&1; {cmd}")])
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("TERM", "dumb")
-        .env("NO_COLOR", "1")
-        .env("CARGO_TERM_COLOR", "never")
-        .env("CI", "1")
-        .env("FORGE_VERIFY", "1")
-        .process_group(0);
-    if dir.join("Cargo.toml").exists()
-        && let Some(sdk) = sdk_root()
-    {
-        command.env("SDKROOT", sdk);
-    }
-    // Sin target propio en el worktree, uno compartido por proyecto en la
-    // caché: las dependencias se compilan una vez para todos sus agentes.
-    if dir.join("target").exists() {
-        command.env_remove("CARGO_TARGET_DIR");
-    } else {
-        command.env("CARGO_TARGET_DIR", &target);
-    }
-    let mut child = command.spawn().map_err(|e| format!("No se pudo ejecutar: {e}"))?;
-    let mut stdout = child.stdout.take().ok_or("sin salida")?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 16 * 1024];
-        while let Ok(n) = stdout.read(&mut chunk) {
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            if buf.len() > 2 * KEEP {
-                buf.drain(..buf.len() - KEEP);
-            }
-        }
-        buf
-    });
-    let start = Instant::now();
-    let kill = |child: &mut std::process::Child| {
-        // Todo el grupo: la shell y lo que lanzó (cargo, rustc, node...).
-        // SAFETY: kill(2) con el id de grupo de un proceso hijo nuestro.
-        unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-        let _ = child.wait();
+    let spec = exec::Spec {
+        cmd,
+        dir: &job.dir,
+        project: &job.repo,
+        sandboxed: true,
+        network: job.network,
+        timeout: job.timeout,
+        env: &[("CI", "1"), ("FORGE_VERIFY", "1")],
     };
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            kill(&mut child);
-            return Ok(None);
+    let out = exec::run(&spec, &|| cancel.load(Ordering::Relaxed), &mut |_| {})?;
+    Ok(match out.end {
+        End::Cancelled => None,
+        End::Exit(code) => Some((code == Some(0), out.text)),
+        End::Timeout => {
+            let min = job.timeout.as_secs() / 60;
+            Some((false, format!("{}\n[forge] Cancelado: tardó más de {min} min\n", out.text)))
         }
-        if start.elapsed() > timeout {
-            kill(&mut child);
-            let out = reader.join().unwrap_or_default();
-            let mut text = strip_ansi(&String::from_utf8_lossy(&out));
-            text.push_str(&format!("\n[forge] Cancelado: tardó más de {} min\n", timeout.as_secs() / 60));
-            return Ok(Some((false, text)));
-        }
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-            Err(e) => return Err(e.to_string()),
-        }
-    };
-    let out = reader.join().unwrap_or_default();
-    let start = out.len().saturating_sub(KEEP);
-    Ok(Some((status.success(), strip_ansi(&String::from_utf8_lossy(&out[start..])))))
+    })
 }
 
 /// Verifica un worktree: si tiene cambios y se puede, ejecuta el comando
@@ -483,6 +346,8 @@ impl Verify {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_agent::exec::{strip_ansi, target_dir};
+    use std::process::Command;
 
     #[test]
     fn summarizes_cargo() {

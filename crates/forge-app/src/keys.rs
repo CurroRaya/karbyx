@@ -52,6 +52,9 @@ pub enum Action {
     Review,
     /// Mesa de agentes / terminal.
     Board,
+    /// Chat con los modelos locales / terminal, y conversación nueva.
+    Chat,
+    NewChat,
 }
 
 /// Nombre de cada acción configurable en `[keys]`.
@@ -87,6 +90,8 @@ const NAMES: &[(&str, Action)] = &[
     ("new_agent", Action::NewAgent),
     ("review", Action::Review),
     ("board", Action::Board),
+    ("chat", Action::Chat),
+    ("new_chat", Action::NewChat),
 ];
 
 const DEFAULTS: &[(&str, &str)] = &[
@@ -124,6 +129,8 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("new_agent", "cmd+shift+a"),
     ("review", "cmd+r"),
     ("board", "cmd+e"),
+    ("chat", "cmd+l"),
+    ("new_chat", "cmd+n"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

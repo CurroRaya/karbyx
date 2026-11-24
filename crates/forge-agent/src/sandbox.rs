@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
-//! Sandbox de macOS (`sandbox-exec`) para ejecutar los tests de un agente.
+//! Sandbox de macOS (`sandbox-exec`) para los comandos del agente del chat y
+//! los tests de los agentes de la mesa.
 //!
-//! Los tests son código que ha podido escribir el agente y que nadie ha
-//! revisado. Todo está prohibido salvo lo que se permite aquí: leer (menos
+//! Es código que ha podido escribir un modelo y que nadie ha revisado. Todo está prohibido salvo lo que se permite aquí: leer (menos
 //! las claves habituales), y escribir en el worktree, en la caché de
 //! compilación y en una carpeta temporal. Sin red, sin lanzar otras apps y
 //! sin tocar lo que luego se ejecuta fuera del sandbox (`.git`, `.claude`...).
@@ -15,7 +15,7 @@ use std::process::Command;
 const EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Carpetas del HOME que no se pueden leer.
-const SECRETS: [&str; 24] = [
+pub const SECRETS: [&str; 25] = [
     ".ssh",
     ".aws",
     ".azure",
@@ -34,6 +34,7 @@ const SECRETS: [&str; 24] = [
     ".cargo/credentials.toml",
     ".zsh_history",
     ".bash_history",
+    "Library/Application Support/forge",
     "Library/Keychains",
     "Library/Cookies",
     "Library/Messages",
@@ -44,7 +45,7 @@ const SECRETS: [&str; 24] = [
 
 /// Archivos del worktree que no se pueden escribir, a cualquier nivel: los
 /// leen o ejecutan luego git, los asistentes o el editor, fuera del sandbox.
-const PROTECTED: [&str; 11] = [
+pub const PROTECTED: [&str; 11] = [
     ".git",
     ".claude",
     ".codex",

@@ -1,26 +1,73 @@
 # forge
 
-El centro de mando para tus agentes de IA en macOS, escrito en Rust. Al
-abrirlo no ves un prompt: ves **la mesa**, con tus agentes (Claude Code,
-Codex CLI, Gemini CLI) ordenados por lo que necesitan de ti. Escribes una
-tarea, pulsas ↵, y un agente se pone a trabajar en su propia copia del
-proyecto; tú revisas y fusionas. Por debajo, una terminal GPU completa con lo
-mejor de iTerm2 y Warp.
-
-Su aspecto es el de una forja: carbón cálido, acentos de brasa y una mesa donde
-cada agente tiene temperatura. Los que trabajan laten como brasas, el que te
-espera está al rojo y lo terminado se enfría a acero. El tema de la terminal,
-«forja», va a juego; el anterior sigue disponible como `one-dark`.
-
 [![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
+
+**Tu agente de programación para macOS, con los modelos que tienes en casa.**
+
+Sirves un modelo en tu PC con llama.cpp o Strata y forge, en el Mac, se conecta
+a él por tu red: lee tu proyecto, lo edita y ejecuta comandos, pidiéndote
+permiso. El modelo solo piensa; tus archivos se quedan en el Mac y lo que el
+agente lee solo viaja a tu PC. Es una app nativa, escrita en Rust y dibujada
+por la GPU, y está en español.
+
+![El chat de forge: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
+
+*Captura hecha con un servidor de prueba: ni el modelo ni la velocidad son reales.*
+
+| Vista | Qué es |
+|---|---|
+| **Chat** (⌘L) | El agente de forge con tus modelos locales. Es con lo que se abre. |
+| **Mesa** (⌘E) | Para dirigir a la vez a Claude Code, Codex CLI y Gemini CLI, cada uno en su propia copia del proyecto. |
+| **Terminal** | Una terminal GPU completa, con paneles, bloques de comandos y el consumo de tus asistentes. |
+
+De momento tu modelo local trabaja en el chat, no en la mesa.
 
 forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
 misma licencia, para que todas las mejoras sigan siendo de todos.
 
+## Empezar en cinco minutos
+
+**1. Instala forge en el Mac** (necesitas [Rust y las herramientas de
+Xcode](#requisitos)):
+
+```bash
+git clone https://github.com/CurroRaya/forge_term.git
+cd forge_term
+scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
+```
+
+**2. Abre forge** (⌘Espacio, «forge»), pulsa **Conectar con mi PC** y copia la
+orden de tu servidor. Lleva una clave ya generada, que se rellena sola en el
+formulario.
+
+**3. En el PC**, pega la orden. Con llama.cpp, cambia `modelo.gguf` por la ruta
+del tuyo:
+
+```powershell
+llama-server -m modelo.gguf --host 0.0.0.0 --port 8080 -c 32768 -ngl 99 --api-key CLAVE
+```
+
+```powershell
+strata launch --access lan --port 8080 --api-key CLAVE
+```
+
+Si Windows pregunta por el cortafuegos, permite solo las redes privadas.
+
+**4. Escribe la dirección del PC** en forge (`192.168.1.50:8080`) y pulsa ↵. En
+Windows la da `ipconfig`: la «Dirección IPv4» del adaptador que tiene puerta de
+enlace. La primera vez, macOS pide permiso para la red local.
+
+**5. Elige una carpeta** y pide algo.
+
 ## Requisitos
 
-- **macOS** (probado en macOS 27). Linux y Windows aún no están soportados.
+- **macOS** (probado en macOS 27). Linux y Windows aún no están soportados: el
+  PC del modelo puede ser cualquiera, pero forge se ejecuta en un Mac.
+- **Un servidor de modelos** con la API de OpenAI. Probado con llama.cpp y
+  Gemma 4 26B; Strata y otros deberían funcionar, pero no los hemos probado. El
+  modelo debe admitir **herramientas** para trabajar en una carpeta, y se
+  recomiendan **32k de contexto** o más.
 - **Herramientas de línea de comandos de Xcode** (el enlazador que usa Rust):
 
   ```bash
@@ -48,20 +95,11 @@ misma licencia, para que todas las mejoras sigan siendo de todos.
   ```
 
 - **Opcional:** [Claude Code](https://claude.com/claude-code), Codex CLI o
-  Gemini CLI para las sesiones de IA y el panel de consumo.
+  Gemini CLI para la mesa, sus sesiones y el panel de consumo.
 
 ## Instalación
 
-```bash
-git clone https://github.com/CurroRaya/forge_term.git
-cd forge_term
-cargo install --path crates/forge-app      # la terminal  → ~/.cargo/bin/forge-app
-cargo install --path crates/forge-usage    # CLI de consumo → ~/.cargo/bin/forge-usage
-```
-
-La primera compilación tarda unos minutos; las siguientes, segundos.
-
-### Como app de macOS (Dock y Launchpad)
+### Como app de macOS (recomendado)
 
 ```bash
 scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
@@ -69,11 +107,19 @@ scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
 
 Crea `target/release/Forge.app`, con su icono y firmada para este Mac, y con
 `--install` la copia a `~/Applications`. Desde ahí la abres con Spotlight
-(⌘Espacio, «forge») o la anclas al Dock. Sin `--install` solo la crea. Para
-actualizarla, vuelve a ejecutar el mismo comando tras `git pull`.
+(⌘Espacio, «forge») o la anclas al Dock. Sin `--install` solo la crea.
 
-Abierta desde el Dock, forge empieza en tu carpeta personal y toma el idioma
-de macOS (`LANG`), como Terminal.
+Abierta desde el Dock, sus terminales empiezan en tu carpeta personal y toman
+el idioma de macOS (`LANG`), como Terminal.
+
+### Desde la terminal
+
+```bash
+cargo install --path crates/forge-app      # la app          → ~/.cargo/bin/forge-app
+cargo install --path crates/forge-usage    # CLI de consumo  → ~/.cargo/bin/forge-usage
+```
+
+La primera compilación tarda unos minutos; las siguientes, segundos.
 
 ## Ejecutar
 
@@ -94,7 +140,7 @@ cargo run --release -p forge-usage -- watch
 ```
 
 Si lo lanzas desde una terminal y quieres poder cerrarla sin que se cierre
-forge, lánzalo desvinculado (o usa la [app](#como-app-de-macos-dock-y-launchpad)):
+forge, lánzalo desvinculado (o usa la [app](#como-app-de-macos-recomendado)):
 
 ```bash
 forge-app &!
@@ -105,25 +151,36 @@ forge-app &!
 ```bash
 cd forge_term
 git pull
-cargo install --path crates/forge-app
+scripts/bundle.sh --install                # si usas la app
+cargo install --path crates/forge-app      # si la instalaste con cargo
 cargo install --path crates/forge-usage
 ```
+
+Cierra forge antes y vuelve a abrirla después.
 
 ## Desinstalar
 
 ```bash
 cargo uninstall forge-app forge-usage
 rm -rf ~/Applications/Forge.app                  # si instalaste la app
-rm -rf ~/.config/forge ~/Library/Caches/forge   # configuración y caché (opcional)
+rm -rf ~/.config/forge ~/Library/Caches/forge    # configuración y caché (opcional)
+rm -rf ~/Library/Application\ Support/forge      # servidores del chat y sus claves (opcional)
 ```
 
-forge no modifica tu `.zshrc` ni ningún archivo tuyo: la integración con zsh
+forge no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
+la carpeta que elijas). La integración con zsh
 vive en `~/Library/Caches/forge` y desaparece con ella.
 
 ## Solución de problemas
 
 | Problema | Solución |
 |---|---|
+| «No llego a…» al conectar | El PC está en otra red, o forge no tiene permiso en *Ajustes del Sistema › Privacidad y seguridad › Red local*. |
+| «… no responde» al conectar | El PC está apagado o el cortafuegos de Windows corta el puerto. Comprueba también la IP: el router puede cambiarla. |
+| «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
+| «El servidor pide una clave» | La clave de forge no es la de `--api-key`. Menú de modelos › *Editar*. |
+| El modelo contesta, pero no usa las herramientas | Elige una carpeta; si ya la tienes, ese modelo o su plantilla no las admiten. |
+| Olvida cosas en tareas largas | El contexto se llena: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
 | `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
@@ -135,16 +192,67 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 
 | Crate | Qué hace |
 |---|---|
-| `forge-app` | Binario de la terminal: render por GPU (wgpu + glyphon), pestañas en una barra lateral, paneles divididos, selección y búsqueda, panel de consumo de IA, `forge.toml` con temas y atajos |
+| `forge-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, y el sandbox de macOS con la ejecución de comandos |
+| `forge-app` | La app: render por GPU (wgpu + glyphon), chat, mesa, terminales con pestañas y paneles, panel de consumo, `forge.toml` con temas y atajos |
 | `forge-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
 | `forge-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
 | `forge-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
 
 ## Uso
 
+### El chat (⌘L)
+
+- **Carpeta**: elígela abajo a la izquierda y el modelo podrá leer, buscar,
+  editar y ejecutar en ella. Sin carpeta es un chat normal, sin herramientas.
+  Una conversación empezada se queda en su carpeta. Si el proyecto tiene
+  `AGENTS.md` (o `CLAUDE.md`), el modelo lo lee al empezar.
+- **Modelo**: el menú junta los de todos tus servidores. Si el tuyo se apaga,
+  forge lo reintenta solo. Desde ahí se abre también **Claude Code**, en una
+  terminal de forge y en la misma carpeta, con tu suscripción y sus permisos.
+- **Permisos**: leer dentro de la carpeta es libre; editar y ejecutar se
+  preguntan enseñando el diff o el comando. **⌘↵** permite, **esc** para, y si
+  escribes otra cosa el modelo la recibe como respuesta.
+- **Automático** (⇧⇥, o *Siempre en este chat*): edita en la carpeta y ejecuta
+  en el sandbox sin preguntar. Trabaja sobre tus archivos, no sobre una copia:
+  úsalo con git al día.
+- **Mientras trabaja** puedes escribir el siguiente mensaje, que se envía al
+  acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y forge
+  avisa si una termina o pide permiso y no la estás viendo.
+- **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
+  Cerca del límite, el agente olvida los resultados antiguos de sus
+  herramientas.
+
+| Herramienta | Qué hace | Permiso |
+|---|---|---|
+| `read`, `list`, `search`, `find` | Leer, listar, buscar en el contenido y por nombre | Libre dentro de la carpeta |
+| `edit`, `write` | Cambiar una parte de un archivo, o crearlo | Se pregunta, con el diff |
+| `bash` | Ejecutar un comando en la carpeta, dentro del sandbox | Se pregunta |
+
+**Se pregunta siempre**, también en Automático: ejecutar fuera del sandbox,
+salir de la carpeta, leer archivos que suelen tener claves (`.env`, `*.pem`...)
+y escribir en `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
+herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
+
+#### Qué protege y qué no
+
+- Los comandos se ejecutan en el **sandbox de macOS**: sin red, sin lanzar
+  otras apps, sin leer las claves habituales (`~/.ssh`, `~/.aws`, llavero,
+  `~/.claude`...) y escribiendo solo en la carpeta, una caché de compilación y
+  una carpeta temporal. Si no se puede aislar, no se ejecutan. El resto de tus
+  archivos sí se puede leer, y un comando puede leer el `.env` del proyecto.
+- La conexión con el PC es **HTTP sin cifrar**: la conversación y la clave
+  viajan en claro. Úsala en tu red o por una VPN, y nunca abras el puerto a
+  internet. Pon siempre una clave: sin ella, cualquiera de tu red puede usar el
+  modelo.
+- Los servidores y sus claves se guardan en
+  `~/Library/Application Support/forge/chat.json`, que solo tú puedes leer.
+- Las conversaciones **aún no se guardan**: se pierden al cerrar forge.
+
 ### La mesa (⌘E)
 
-Es la pantalla con la que abre forge.
+Para trabajar con Claude Code, Codex CLI y Gemini CLI. Cada agente tiene
+temperatura: los que trabajan laten como brasas, el que te espera está al rojo
+y lo terminado se enfría a acero.
 
 - **«¿Qué hay que hacer?»**: escribe la tarea y pulsa ↵. forge lanza un agente
   (el asistente seleccionado, Claude por defecto) en un **worktree propio**
@@ -187,14 +295,17 @@ Es la pantalla con la que abre forge.
 - Clic en una tarjeta (o ↑↓ y ↵) abre su terminal; **Revisar** abre el diff
   (⌘R) para fusionar o descartar. Abajo, tus terminales normales.
 - **⌘E** alterna entre la mesa y las terminales; ⌘T, ⌘⇧C... también te llevan
-  a las terminales. Si prefieres abrir en la terminal:
-  `[window] start = "terminal"`.
+  a las terminales.
 
 ### Atajos
 
 | Atajo | Acción |
 |---|---|
+| ⌘L · ⌘N | El chat / conversación nueva |
 | ⌘E | La mesa de agentes / volver a las terminales |
+| ↵ / ⇧↵ | Enviar / línea nueva (en el chat) |
+| ⌘↵ / esc | Permitir lo que pide el modelo / no permitirlo y parar |
+| ⇧⇥ | Preguntar antes / Automático (en el chat) |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |
 | ⌘⌥←→↑↓ | Moverse entre paneles |
@@ -220,9 +331,9 @@ clic la línea y ⌥+arrastrar un bloque rectangular. Los divisores entre
 paneles se arrastran. Si la aplicación pide el ratón (vim, htop, tmux) los
 clics le llegan a ella; con ⇧ se fuerza la selección normal.
 
-### Agentes: forge sabe qué hacen
+### Agentes externos: forge sabe qué hacen
 
-forge está pensado para trabajar con varios agentes de IA a la vez.
+Con Claude Code, Codex CLI y Gemini CLI, en la mesa o en una terminal:
 
 - **Estado en la barra lateral:** cada sesión de un agente muestra si está
   **trabajando** (◐), **te espera** (● naranja) o ha **terminado** (✓), con su
@@ -315,7 +426,7 @@ line_height = 1.3
 
 [window]
 padding = 10
-start = "mesa"             # "terminal": abrir en la terminal en vez de en la mesa
+start = "chat"             # o "mesa" o "terminal": qué se ve al abrir
 
 [terminal]
 scrollback = 10000
@@ -324,7 +435,7 @@ shell_integration = true   # bloques de comandos (zsh)
 notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 
 [theme]
-name = "forja"             # forja | one-dark | dracula | solarized-dark | gruvbox | light
+name = "forja"             # forja (carbón y brasa) | one-dark | dracula | solarized-dark | gruvbox | light
 # background = "#171412"   # cualquier color suelto sobrescribe el tema
 
 [verify]                   # tests de un agente, en un sandbox
@@ -343,7 +454,8 @@ Acciones configurables: `copy`, `paste`, `quit`, `new_tab`, `new_ai`, `close`,
 `next_tab`, `prev_tab`, `toggle_sidebar`, `toggle_usage`, `font_bigger`,
 `font_smaller`, `font_reset`, `clear`, `split_right`, `split_down`,
 `focus_left`, `focus_right`, `focus_up`, `focus_down`, `find`, `find_next`,
-`find_prev`, `block_prev`, `block_next`, `ask_ai`, `inbox`.
+`find_prev`, `block_prev`, `block_next`, `ask_ai`, `inbox`, `dashboard`,
+`new_agent`, `review`, `board`, `chat`, `new_chat`.
 
 ### Asistentes y límites
 
@@ -373,6 +485,7 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets
+cargo run --release -p forge-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
 FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app   # vuelca un frame a PNG
 FORGE_PROVIDER=codex cargo run --release -p forge-app               # arranca con ese asistente
 FORGE_SELFTEST=1 cargo run --release -p forge-app                   # teclea solo y registra frames lentos
@@ -382,6 +495,7 @@ FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app 
 FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
 FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
 FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
+FORGE_CAPTURE_CHAT="1500:hola" FORGE_CHAT_STATE=/tmp/chat.json FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # el chat
 FORGE_CAPTURE_BOARD=1 FORGE_CAPTURE_LAUNCH="tarea" FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # la mesa, lanzando una tarea
 FORGE_CAPTURE_WORKTREE=1 FORGE_CAPTURE_AI=1 FORGE_CAPTURE_REVIEW=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # agente en worktree y panel ⌘R
 echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook

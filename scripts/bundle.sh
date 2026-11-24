@@ -48,6 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDevelopmentRegion</key><string>es</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>NSLocalNetworkUsageDescription</key><string>forge se conecta al servidor de modelos de tu red.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
     <key>NSHumanReadableCopyright</key><string>© 2026 Francisco José Raya García (Curro) y los colaboradores de forge · GPL-3.0-or-later</string>

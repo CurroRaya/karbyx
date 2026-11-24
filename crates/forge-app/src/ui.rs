@@ -64,6 +64,15 @@ impl Area {
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
+    pub fn intersect(&self, o: Area) -> Area {
+        let (x, y) = (self.x.max(o.x), self.y.max(o.y));
+        let (r, b) = (self.right().min(o.right()), self.bottom().min(o.bottom()));
+        Area::new(x, y, (r - x).max(0.0), (b - y).max(0.0))
+    }
+    /// Encogida `d` por cada lado.
+    pub fn inset(&self, d: f32) -> Area {
+        Area::new(self.x + d, self.y + d, (self.w - 2.0 * d).max(0.0), (self.h - 2.0 * d).max(0.0))
+    }
 }
 
 /// Reparto de la ventana entre paneles.
@@ -109,6 +118,8 @@ pub struct Label {
     pub bold: bool,
     pub align: Align,
     pub font: Font,
+    /// Recorte adicional (zonas con scroll).
+    pub clip: Option<Area>,
 }
 
 /// Zonas clicables.
@@ -151,6 +162,10 @@ pub enum Hit {
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
     BoardLaunch,
+    /// Ir al chat o a las terminales.
+    OpenChat,
+    OpenTerminal,
+    Chat(crate::chat::ChatHit),
 }
 
 /// Color de cada asistente.
@@ -167,6 +182,8 @@ pub struct Ui {
     pub rects: Vec<Rect>,
     pub labels: Vec<Label>,
     pub hits: Vec<(Area, Hit)>,
+    /// Recorte de lo que se añada a partir de ahora (texto y clics).
+    pub clip: Option<Area>,
     scale: f32,
 }
 
@@ -274,10 +291,12 @@ impl Ui {
             bold,
             align,
             font: Font::Sans,
+            clip: self.clip,
         });
     }
 
     pub fn hit(&mut self, a: Area, h: Hit) {
+        let a = self.clip.map_or(a, |c| c.intersect(a));
         self.hits.push((a, h));
     }
 
@@ -401,21 +420,10 @@ pub fn draw_left(
     ui.gradient(logo, (HOT, 1.0), ([0xd2, 0x5f, 0x2c], 1.0), 5.0);
     ui.text("❯", logo.x, logo.y + ui.s(2.0), logo.w, 11.0, [0x1c, 0x12, 0x0b], true, Align::Center);
     ui.text("forge", logo.right() + ui.s(8.0), y + ui.s(2.0), ui.s(70.0), 14.0, TEXT, true, Align::Left);
-    let mesa = Area::new(area.right() - pad - ui.s(84.0), y, ui.s(84.0), ui.s(24.0));
-    let mh = hover == Some(Hit::OpenBoard);
-    ui.panel(mesa, if mh { ACTIVE_BG } else { HOVER_BG }, BORDER, 7.0, 1.0);
-    ui.text(
-        "Mesa ⌘E",
-        mesa.x,
-        mesa.y + ui.s(4.0),
-        mesa.w,
-        11.0,
-        if mh { EMBER } else { TEXT },
-        true,
-        Align::Center,
-    );
-    ui.hit(mesa, Hit::OpenBoard);
-    y += ui.s(44.0);
+    y += ui.s(36.0);
+    let nav = Area::new(area.x + ui.s(12.0), y, area.w - ui.s(24.0), ui.s(32.0));
+    crate::chat::draw::draw_nav(ui, nav, 2, hover);
+    y += ui.s(46.0);
     ui.text("SESIONES", area.x + pad, y, area.w - 2.0 * pad, 10.5, DIM, true, Align::Left);
 
     // Aviso de agentes que esperan (abre la bandeja de atención).
@@ -523,9 +531,9 @@ pub fn draw_left(
             let label = format!("◆  Nueva sesión de {}", p.name());
             ui.text(label, btn.x, btn.y + ui.s(9.0), btn.w, 12.5, accent(p), true, Align::Center);
             ui.hit(btn, Hit::NewAi);
-            format!("⌘E mesa · ⌘T terminal · ⌘⇧C {}", p.name())
+            format!("⌘L chat · ⌘E mesa · ⌘⇧C {}", p.name())
         }
-        None => "⌘E mesa · ⌘T terminal · ⌘J agentes".to_string(),
+        None => "⌘L chat · ⌘E mesa · ⌘T terminal".to_string(),
     };
     ui.text(
         hint,

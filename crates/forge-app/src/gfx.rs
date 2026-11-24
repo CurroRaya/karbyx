@@ -12,7 +12,7 @@ use std::sync::Arc;
 use forge_term::{CellView, GridSize, Rgb8, Snapshot, Theme};
 use glyphon::cosmic_text::{Align as TextAlign, Ellipsize, EllipsizeHeightLimit};
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
+    Attrs, Buffer, Cache, Color, Cursor, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
 };
 use winit::event_loop::ActiveEventLoop;
@@ -21,7 +21,7 @@ use winit::window::Window;
 use crate::capture;
 use crate::panes::PaneId;
 use crate::rects::{Rect, RectRenderer, linear};
-use crate::ui::{Align, Area, Font, Label};
+use crate::ui::{Align, Area, Font, Label, Rgb};
 
 const SANS_FAMILY: &str = "Helvetica Neue";
 
@@ -67,6 +67,43 @@ pub struct PaneText {
     pub clip: Area,
 }
 
+/// Trozo de texto con estilo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RichSpan {
+    pub text: String,
+    pub color: Rgb,
+    pub bold: bool,
+    pub italic: bool,
+    pub mono: bool,
+}
+
+/// Texto de varias líneas, con ajuste al ancho.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rich {
+    pub spans: Vec<RichSpan>,
+    pub px: f32,
+    /// Alto de línea en píxeles.
+    pub line: f32,
+}
+
+/// Un texto rico colocado en pantalla.
+#[derive(Debug, Clone, Copy)]
+pub struct RichDraw {
+    pub key: u64,
+    pub x: f32,
+    pub y: f32,
+    pub clip: Area,
+}
+
+struct RichBuf {
+    buffer: Buffer,
+    height: f32,
+    last_used: u64,
+}
+
+/// Posición dentro de un texto: línea lógica (separada por `\n`) y byte.
+pub type TextPos = (usize, usize);
+
 pub struct Gfx {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -89,6 +126,7 @@ pub struct Gfx {
     pane_rows: HashMap<PaneId, Vec<u64>>,
     frame_no: u64,
     labels: HashMap<u64, LabelBuf>,
+    rich: HashMap<u64, RichBuf>,
     pub metrics: CellMetrics,
     font: FontSpec,
     // La ventana va la última: debe destruirse después de la superficie.
@@ -201,6 +239,7 @@ impl Gfx {
             pane_rows: HashMap::new(),
             frame_no: 0,
             labels: HashMap::new(),
+            rich: HashMap::new(),
             metrics,
             font,
             window,
@@ -316,6 +355,89 @@ impl Gfx {
         key
     }
 
+    /// Maqueta un texto al ancho `w`. Devuelve su clave y su alto.
+    pub fn rich(&mut self, r: &Rich, w: f32) -> (u64, f32) {
+        let mut h = DefaultHasher::new();
+        (r.px.to_bits(), r.line.to_bits(), w.to_bits()).hash(&mut h);
+        for s in &r.spans {
+            (&s.text, s.color, s.bold, s.italic, s.mono).hash(&mut h);
+        }
+        let key = h.finish();
+        let frame = self.frame_no;
+        if let Some(b) = self.rich.get_mut(&key) {
+            b.last_used = frame;
+            return (key, b.height);
+        }
+        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(r.px, r.line));
+        buffer.set_wrap(Wrap::WordOrGlyph);
+        buffer.set_size(Some(w.max(1.0)), None);
+        let base = Attrs::new().family(Family::SansSerif);
+        let spans = r.spans.iter().map(|s| {
+            let mut a = base.clone().color(Color::rgb(s.color[0], s.color[1], s.color[2]));
+            if s.mono {
+                a = a.family(Family::Monospace).metrics(Metrics::new(r.px * 0.89, r.line));
+            }
+            if s.bold {
+                a = a.weight(Weight::SEMIBOLD);
+            }
+            if s.italic {
+                a = a.style(Style::Italic);
+            }
+            (s.text.as_str(), a)
+        });
+        buffer.set_rich_text(spans, &base, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let height = buffer.layout_runs().map(|r| r.line_height).sum::<f32>().max(r.line);
+        self.rich.insert(key, RichBuf { buffer, height, last_used: frame });
+        (key, height)
+    }
+
+    /// Ancho de la línea más larga de un texto ya maquetado.
+    pub fn rich_width(&self, key: u64) -> f32 {
+        self.rich.get(&key).map_or(0.0, |b| b.buffer.layout_runs().map(|r| r.line_w).fold(0.0, f32::max))
+    }
+
+    /// Posición del texto bajo un punto (relativo a su esquina).
+    pub fn rich_hit(&self, key: u64, x: f32, y: f32) -> Option<TextPos> {
+        let b = self.rich.get(&key)?;
+        let y = y.clamp(0.0, (b.height - 1.0).max(0.0));
+        b.buffer.hit(x, y).map(|c| (c.line, c.index))
+    }
+
+    /// Esquina superior izquierda del cursor en una posición.
+    pub fn rich_caret(&self, key: u64, pos: TextPos) -> Option<(f32, f32)> {
+        let b = self.rich.get(&key)?;
+        let mut best = None;
+        for run in b.buffer.layout_runs().filter(|r| r.line_i == pos.0) {
+            let start = run.glyphs.first().map_or(0, |g| g.start);
+            let end = run.glyphs.last().map_or(0, |g| g.end);
+            if pos.1 >= start || best.is_none() {
+                let x = run
+                    .glyphs
+                    .iter()
+                    .find(|g| g.start >= pos.1)
+                    .map_or(if pos.1 >= end { run.line_w } else { 0.0 }, |g| g.x);
+                best = Some((x, run.line_top));
+            }
+        }
+        best
+    }
+
+    /// Cajas (relativas) del texto entre dos posiciones.
+    pub fn rich_boxes(&self, key: u64, a: TextPos, b: TextPos) -> Vec<Area> {
+        let Some(buf) = self.rich.get(&key) else { return Vec::new() };
+        let cur = |p: TextPos| Cursor::new(p.0, p.1);
+        let mut out = Vec::new();
+        for run in buf.buffer.layout_runs().filter(|r| r.line_i >= a.0 && r.line_i <= b.0) {
+            for (x, w) in run.highlight(cur(a), cur(b)) {
+                if w > 0.0 {
+                    out.push(Area::new(x, run.line_top, w, run.line_height));
+                }
+            }
+        }
+        out
+    }
+
     fn label_buffer(&mut self, l: &Label) -> u64 {
         let key = label_key(l);
         let fs = &mut self.font_system;
@@ -352,6 +474,7 @@ impl Gfx {
         rects: &[Rect],
         panes: &[PaneText],
         labels: &[Label],
+        rich: &[RichDraw],
         overlay_rects: &[Rect],
         overlay_labels: &[Label],
         foreground: Rgb8,
@@ -362,6 +485,7 @@ impl Gfx {
         self.pane_rows.retain(|id, _| panes.iter().any(|p| p.pane == *id));
         let frame = self.frame_no;
         self.lines.retain(|_, l| l.last_used + LINE_TTL_FRAMES >= frame);
+        self.rich.retain(|_, b| b.last_used + 2 >= frame);
         self.frame_no += 1;
         for l in self.labels.values_mut() {
             l.alive = false;
@@ -400,7 +524,19 @@ impl Gfx {
                 left: l.area.x,
                 top: l.area.y,
                 scale: 1.0,
-                bounds: bounds(l.area),
+                bounds: bounds(l.clip.map_or(l.area, |c| c.intersect(l.area))),
+                default_color,
+                custom_glyphs: &[],
+            });
+        }
+        for r in rich {
+            let Some(b) = self.rich.get(&r.key) else { continue };
+            areas.push(TextArea {
+                buffer: &b.buffer,
+                left: r.x,
+                top: r.y,
+                scale: 1.0,
+                bounds: bounds(r.clip),
                 default_color,
                 custom_glyphs: &[],
             });

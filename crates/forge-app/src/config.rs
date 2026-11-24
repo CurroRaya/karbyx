@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
-//! Configuración de la terminal: `~/.config/forge/forge.toml`.
+//! Configuración de forge: `~/.config/forge/forge.toml`.
 //!
 //! ```toml
 //! [font]
@@ -11,6 +11,7 @@
 //!
 //! [window]
 //! padding = 10
+//! start = "chat"             # chat | mesa | terminal: qué se ve al abrir
 //!
 //! [terminal]
 //! scrollback = 10000
@@ -61,13 +62,13 @@ impl Default for FontConfig {
 #[serde(default)]
 pub struct WindowConfig {
     pub padding: f32,
-    /// Qué se ve al abrir forge: `"mesa"` (los agentes) o `"terminal"`.
+    /// Qué se ve al abrir forge: `"chat"`, `"mesa"` (los agentes) o `"terminal"`.
     pub start: String,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { padding: 10.0, start: "mesa".into() }
+        Self { padding: 10.0, start: "chat".into() }
     }
 }
 

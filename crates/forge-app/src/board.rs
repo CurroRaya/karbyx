@@ -447,6 +447,7 @@ impl App {
     pub(super) fn show_board(&mut self, on: bool) {
         self.board_visible = on;
         if on {
+            self.chat_visible = false;
             self.inbox = None;
             self.dashboard = None;
             self.review = None;
@@ -857,11 +858,12 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
         Align::Left,
     );
 
-    let right_w = ui.s(150.0);
+    let right_w = ui.s(196.0);
+    crate::chat::draw::draw_nav(ui, Area::new(x + w - right_w, y - ui.s(2.0), right_w, ui.s(30.0)), 1, hover);
     ui.text(
         format!("hoy {} tok", ui::tok(v.today)),
         x + w - right_w,
-        y + ui.s(14.0),
+        y + ui.s(33.0),
         right_w,
         11.5,
         ui::DIM,

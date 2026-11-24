@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
 
-//! `forge`: terminal acelerada por GPU con sesiones en una barra lateral,
-//! paneles divididos y el consumo de los asistentes de IA en un panel derecho.
+//! `forge`: un agente de programación con modelos locales (chat), una mesa
+//! para dirigir a otros agentes y una terminal acelerada por GPU.
 
 mod agents;
 mod board;
 mod capture;
+mod chat;
 mod config;
 mod gfx;
 mod input;
@@ -16,7 +17,6 @@ mod panes;
 mod query;
 mod rects;
 mod review;
-mod sandbox;
 mod ui;
 mod usage;
 mod verify;
@@ -42,7 +42,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::Config;
-use crate::gfx::{CursorStyle, FontSpec, Gfx, PaneText};
+use crate::gfx::{CursorStyle, FontSpec, Gfx, PaneText, RichDraw};
 use crate::input::KeyOutcome;
 use crate::keys::{Action, Bindings};
 use crate::panes::{Divider, Node, PaneId, SplitDir};
@@ -120,6 +120,16 @@ fn complete_gui_env() {
     if std::env::var_os("SHELL").is_none_or(|s| s.is_empty()) {
         // SAFETY: igual que arriba.
         unsafe { std::env::set_var("SHELL", "/bin/zsh") };
+    }
+}
+
+/// Mantener pulsada una tecla la repite, en vez de abrir el menú de acentos
+/// de macOS (que aparece al aceptar texto compuesto).
+fn disable_press_and_hold() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSUserDefaults, ns_string};
+        NSUserDefaults::standardUserDefaults().setBool_forKey(false, ns_string!("ApplePressAndHoldEnabled"));
     }
 }
 
@@ -213,6 +223,14 @@ enum UserEvent {
     BoardStats(Vec<(PaneId, board::Stats)>),
     /// Terminó la verificación de un agente (panel, generación, resultado).
     Verify(PaneId, u64, verify::Report),
+    /// Un agente del chat informa (conversación, evento).
+    Chat(u64, forge_agent::agent::Event),
+    /// Qué modelos tiene un servidor.
+    Probe(Box<forge_agent::api::Server>, Result<Vec<forge_agent::api::Model>, String>),
+    /// Carpeta elegida para el chat.
+    Folder(PathBuf),
+    /// Modo de prueba: mensaje para el chat.
+    ChatSay(String),
     /// Bytes para un panel concreto (p. ej. el ↵ tras escribirle a un agente).
     WritePane(PaneId, Vec<u8>),
 }
@@ -327,6 +345,8 @@ enum Drag {
     Select(PaneId),
     Divider(Divider),
     Report(PaneId),
+    /// Selección en el chat (`true`: en la caja de escritura).
+    Chat(bool),
 }
 
 /// Para detectar doble y triple clic.
@@ -408,6 +428,11 @@ struct App {
     /// La mesa de agentes y si se está viendo (en vez de las terminales).
     board: board::Board,
     board_visible: bool,
+    /// Conversaciones con modelos locales y si se están viendo.
+    chats: chat::Chats,
+    chat_visible: bool,
+    /// Último clic en el chat, para el doble clic.
+    chat_click_at: Option<(Instant, (f32, f32))>,
     /// Hace falta repintar periódicamente (animaciones, tiempos, heurística).
     tick_needed: Arc<AtomicBool>,
 }
@@ -459,6 +484,9 @@ impl App {
             review: None,
             board: board::Board::default(),
             board_visible: false,
+            chats: chat::Chats::new(),
+            chat_visible: false,
+            chat_click_at: None,
             tick_needed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -730,8 +758,8 @@ impl App {
 
     fn handle_action(&mut self, action: Action, event_loop: &ActiveEventLoop) {
         let n = self.tabs.len();
-        // Las acciones de terminales salen de la mesa.
-        if self.board_visible
+        // Las acciones de terminales salen de la mesa y del chat.
+        if (self.board_visible || self.chat_visible)
             && matches!(
                 action,
                 Action::NewTab
@@ -746,6 +774,26 @@ impl App {
             )
         {
             self.show_board(false);
+            self.show_chat(false);
+        }
+        // Con el chat delante no se tocan las terminales de debajo.
+        if self.chat_visible
+            && matches!(
+                action,
+                Action::Close
+                    | Action::ClearScreen
+                    | Action::Paste
+                    | Action::Copy
+                    | Action::Focus(_)
+                    | Action::BlockPrev
+                    | Action::BlockNext
+                    | Action::AskAi
+                    | Action::FindNext
+                    | Action::FindPrev
+                    | Action::ToggleRight
+            )
+        {
+            return;
         }
         if self.board_visible && action == Action::Paste {
             if let Some(t) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) {
@@ -755,6 +803,11 @@ impl App {
         }
         match action {
             Action::Board => self.show_board(!self.board_visible),
+            Action::Chat => self.show_chat(!self.chat_visible),
+            Action::NewChat => {
+                self.show_chat(true);
+                self.new_chat();
+            }
             Action::Quit => event_loop.exit(),
             Action::NewTab => {
                 self.open_tab(PaneKind::Shell);
@@ -935,6 +988,12 @@ impl App {
             Hit::AskAi(pane, block) => self.ask_ai(pane, block),
             Hit::OpenInbox => self.inbox = Some(0),
             Hit::OpenBoard => self.show_board(true),
+            Hit::OpenChat => self.show_chat(true),
+            Hit::OpenTerminal => {
+                self.show_chat(false);
+                self.show_board(false);
+            }
+            Hit::Chat(h) => self.chat_click(h),
             Hit::InboxItem(i) => {
                 if let Some((pane, _)) = self.inbox_items().into_iter().nth(i) {
                     self.go_to_pane(pane);
@@ -956,6 +1015,29 @@ impl App {
             | Hit::BoardVerifyEnable(_)
             | Hit::BoardProject
             | Hit::BoardLaunch => self.board_click(hit),
+        }
+        self.redraw();
+    }
+
+    /// Texto compuesto por el teclado (´ + a = á): va a donde se escribe.
+    fn ime_text(&mut self, text: &str) {
+        if self.review.is_some() || self.inbox.is_some() || self.dashboard.is_some() {
+            return;
+        }
+        if self.chat_visible {
+            return self.chat_text(text);
+        }
+        if self.board_visible {
+            self.board.input.push_str(text);
+            self.board.notice = None;
+        } else if let (Some(s), Some(p)) =
+            (self.search.as_mut(), self.tabs.get(self.active).and_then(|t| self.panes.get(&t.focus)))
+        {
+            s.query.push_str(text);
+            s.found = p.session.search_set(&s.query);
+        } else if let Some(p) = self.focused_pane() {
+            p.session.clear_selection();
+            p.session.write(text.as_bytes().to_vec());
         }
         self.redraw();
     }
@@ -1022,6 +1104,16 @@ impl App {
             && let Some(hit) = ui::hit_at(&self.hits, x, y)
         {
             self.click_ui(hit, event_loop);
+            return;
+        }
+        if self.chat_visible {
+            if button == MouseButton::Left {
+                let double = self.chat_click_at.is_some_and(|(t, (px, py))| {
+                    t.elapsed() < Duration::from_millis(400) && (px - x).abs() + (py - y).abs() < 6.0
+                });
+                self.chat_click_at = Some((Instant::now(), (x, y)));
+                self.drag = self.chat_press(x, y, double).map(Drag::Chat);
+            }
             return;
         }
         if button == MouseButton::Left
@@ -1094,6 +1186,7 @@ impl App {
                     self.report_mouse(id, area, Some(tb), MouseAction::Release);
                 }
             }
+            Some(Drag::Chat(_)) => self.chat_drag_end(),
             Some(Drag::Select(id)) => {
                 // Un clic simple sin arrastrar no deja selección.
                 if let Some(p) = self.panes.get(&id)
@@ -1134,6 +1227,7 @@ impl App {
                     self.report_mouse(id, area, Some(TermButton::Left), MouseAction::Motion);
                 }
             }
+            Some(Drag::Chat(input)) => self.chat_drag(x, y, input),
             None => {}
         }
 
@@ -1159,7 +1253,7 @@ impl App {
             if d.dir == SplitDir::Horizontal { CursorIcon::ColResize } else { CursorIcon::RowResize }
         } else if hover.is_some() {
             CursorIcon::Pointer
-        } else if self.pane_at(x, y).is_some() {
+        } else if self.pane_at(x, y).is_some() || (self.chat_visible && self.chat_text_at(x, y)) {
             CursorIcon::Text
         } else {
             CursorIcon::Default
@@ -1174,6 +1268,14 @@ impl App {
 
     fn wheel(&mut self, delta: MouseScrollDelta) {
         if self.board_visible && self.review.is_none() {
+            return;
+        }
+        if self.chat_visible && self.review.is_none() {
+            let scale = self.gfx.as_ref().map_or(1.0, |g| g.scale());
+            self.chat_wheel(match delta {
+                MouseScrollDelta::LineDelta(_, y) => y * 48.0 * scale,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32,
+            });
             return;
         }
         if self.review.is_some() {
@@ -1373,7 +1475,12 @@ impl App {
             }
         }
         // Con el panel de revisión abierto el diff se refresca solo.
-        self.tick_needed.store(any || self.review.is_some() || self.board_visible, Ordering::Relaxed);
+        let down =
+            self.chat_visible && self.chats.servers.iter().any(|s| matches!(s.status, chat::Status::Down(_)));
+        self.tick_needed.store(
+            any || self.review.is_some() || self.board_visible || self.chats.animating() || down,
+            Ordering::Relaxed,
+        );
     }
 
     /// Orden de las pestañas en pantalla: agrupadas por proyecto.
@@ -1448,6 +1555,7 @@ impl App {
         self.dashboard = None;
         self.review = None;
         self.board_visible = false;
+        self.chat_visible = false;
         self.redraw();
     }
 
@@ -1582,6 +1690,7 @@ impl App {
         self.pump_sessions(event_loop);
         self.tick_review();
         self.tick_board();
+        self.tick_chat();
         // `FORGE_CAPTURE_REVIEW`: abre el panel de revisión antes de capturar.
         if capture::target().is_some()
             && self.review.is_none()
@@ -1618,6 +1727,15 @@ impl App {
             (sel, items)
         });
         let board_view = self.board_visible.then(|| self.board_view(&usage));
+        let chat_on = self.chat_visible;
+        let chat_env = chat_on.then(|| chat::draw::Env {
+            tick,
+            hover: self.hover.and_then(Self::chat_hit),
+            zoom: (self.font_spec().size_pt / 14.0).clamp(0.6, 2.5),
+            focused: self.focused,
+            projects: self.chat_projects(),
+            claude: Provider::detect_all().contains(&Provider::Claude),
+        });
         let Some(gfx) = &mut self.gfx else { return };
         let scale = gfx.scale();
         let tab = &self.tabs[self.active];
@@ -1628,7 +1746,7 @@ impl App {
         // Geometría de los paneles de la pestaña activa.
         let gap = scale.round().max(1.0);
         let (mut pane_areas, mut dividers) = (Vec::new(), Vec::new());
-        if board_view.is_none() {
+        if board_view.is_none() && !chat_on {
             tab.root.layout(layout.term, gap, &mut pane_areas, &mut dividers);
         }
 
@@ -1678,6 +1796,7 @@ impl App {
                     bold: false,
                     align: Align::Right,
                     font: Font::Sans,
+                    clip: None,
                 });
             }
         }
@@ -1695,10 +1814,11 @@ impl App {
         }
 
         // Título de la ventana: el del panel activo (o la mesa).
-        if board_view.is_some() {
-            if self.window_title != "Mesa — forge" {
-                gfx.window.set_title("Mesa — forge");
-                self.window_title = "Mesa — forge".into();
+        if board_view.is_some() || chat_on {
+            let title = if chat_on { "Chat — forge" } else { "Mesa — forge" };
+            if self.window_title != title {
+                gfx.window.set_title(title);
+                self.window_title = title.into();
             }
         } else if let Some(v) = views.iter().find(|v| v.index == self.active) {
             let title = if v.subtitle.is_empty() {
@@ -1731,10 +1851,18 @@ impl App {
         if let Some(v) = &board_view {
             board::draw_board(&mut ui, screen, v, tick, self.hover);
         }
-        if let Some(area) = layout.left.filter(|_| board_view.is_none()) {
+        let mut rich: Vec<RichDraw> = Vec::new();
+        if let Some(env) = &chat_env {
+            let l = ui::layout(screen.w, screen.h, scale, self.show_left, false);
+            chat::draw::draw_chat(&mut ui, &mut overlay, gfx, &mut rich, l.term, &mut self.chats, env);
+            if let Some(side) = l.left {
+                chat::draw::draw_side(&mut ui, side, &self.chats, env, self.hover);
+            }
+        }
+        if let Some(area) = layout.left.filter(|_| board_view.is_none() && !chat_on) {
             ui::draw_left(&mut ui, area, &views, ai, attention, tick, self.hover);
         }
-        if let Some(area) = layout.right.filter(|_| board_view.is_none()) {
+        if let Some(area) = layout.right.filter(|_| board_view.is_none() && !chat_on) {
             ui::draw_right(&mut ui, area, &usage, self.usage_sel, self.hover, Utc::now());
         }
         if let Some(s) = &self.search
@@ -1832,6 +1960,7 @@ impl App {
             &rects,
             &texts,
             &labels,
+            &rich,
             &overlay.rects,
             &overlay.labels,
             self.theme.foreground,
@@ -1863,6 +1992,8 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
+        // Sin esto macOS no compone los acentos (´ + a).
+        window.set_ime_allowed(true);
         match pollster::block_on(Gfx::new(window.clone(), event_loop, self.font_spec())) {
             Ok(g) => self.gfx = Some(g),
             Err(e) => {
@@ -1899,13 +2030,23 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
-        // Se abre en la mesa (salvo `start = "terminal"`); en modo captura,
-        // solo si se pide con `FORGE_CAPTURE_BOARD`.
+        // Se abre en el chat (o donde diga `start`); en modo captura, solo si
+        // se pide con `FORGE_CAPTURE_CHAT` o `FORGE_CAPTURE_BOARD`.
         self.board_visible = if capture::target().is_some() {
             std::env::var_os("FORGE_CAPTURE_BOARD").is_some()
         } else {
-            self.config.window.start != "terminal"
+            self.config.window.start == "mesa"
         };
+        let start_chat = if capture::target().is_some() {
+            std::env::var_os("FORGE_CAPTURE_CHAT").is_some()
+        } else {
+            !matches!(self.config.window.start.as_str(), "mesa" | "terminal")
+        };
+        if start_chat {
+            self.show_chat(true);
+            self.capture_chat();
+        }
+        self.probe_servers();
         if capture::target().is_some() {
             // En modo captura: una segunda pestaña y la primera dividida en dos.
             self.open_tab(PaneKind::Shell);
@@ -1974,6 +2115,10 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Review(r) => self.on_review(r),
             UserEvent::BoardStats(s) => self.on_board_stats(s),
             UserEvent::Verify(pane, generation, r) => self.on_verify(pane, generation, r),
+            UserEvent::Chat(id, e) => self.on_chat_event(id, e),
+            UserEvent::Probe(server, r) => self.on_probe(*server, r),
+            UserEvent::Folder(p) => self.set_chat_project(Some(p)),
+            UserEvent::ChatSay(t) => self.chat_say(t),
             UserEvent::WritePane(pane, bytes) => {
                 if let Some(p) = self.panes.get_mut(&pane) {
                     p.session.write(bytes);
@@ -2015,12 +2160,24 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // El chat edita texto: sus teclas van antes que los atajos.
+                if self.chat_visible
+                    && self.review.is_none()
+                    && self.inbox.is_none()
+                    && self.dashboard.is_none()
+                    && self.chat_key(&event)
+                {
+                    return;
+                }
                 // Los atajos de la terminal tienen prioridad, también sobre la búsqueda.
                 if let Some(a) = self.bindings.lookup(&event, self.mods) {
                     self.handle_action(a, event_loop);
                     return;
                 }
                 if self.review.is_some() && self.review_key(&event, event_loop) {
+                    return;
+                }
+                if self.chat_visible && self.inbox.is_none() && self.dashboard.is_none() {
                     return;
                 }
                 if self.board_visible && self.board_key(&event) {
@@ -2060,6 +2217,8 @@ impl ApplicationHandler<UserEvent> for App {
                     KeyOutcome::None => {}
                 }
             }
+            // Acentos y otros caracteres compuestos.
+            WindowEvent::Ime(winit::event::Ime::Commit(text)) => self.ime_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
                 self.mouse_move();
@@ -2143,6 +2302,7 @@ fn main() -> anyhow::Result<()> {
     }
     clean_inherited_env();
     complete_gui_env();
+    disable_press_and_hold();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App::new(event_loop.create_proxy(), Config::load());
