@@ -10,6 +10,8 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 - Versión de macOS y cómo lanzas forge.
 - Pasos para reproducirlo y qué esperabas que pasara.
 - Si es del chat: qué servidor y modelo usas, y su contexto. No pegues tu clave.
+- Si es de un servidor MCP o una habilidad: cuál es y el error que enseña su panel.
+  Quita antes las claves.
 - Si es de rendimiento, la salida de `FORGE_PROFILE=1 forge-app`.
 
 ## Enviar cambios

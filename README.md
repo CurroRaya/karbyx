@@ -6,9 +6,10 @@
 
 Sirves un modelo en tu PC con llama.cpp o Strata y forge, en el Mac, se conecta
 a él por tu red: lee tu proyecto, lo edita y ejecuta comandos, pidiéndote
-permiso. El modelo solo piensa; tus archivos se quedan en el Mac y lo que el
-agente lee solo viaja a tu PC. Es una app nativa, escrita en Rust y dibujada
-por la GPU, y está en español.
+permiso. El modelo solo piensa: las herramientas se ejecutan en el Mac y lo que
+lee viaja a tu PC, no a la nube, salvo que tú añadas
+[algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust y
+dibujada por la GPU, y está en español.
 
 ![El chat de forge: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
 
@@ -22,6 +23,15 @@ por la GPU, y está en español.
 
 Las conversaciones del chat se ven también en la mesa, y desde ella puedes lanzar
 tareas a tu modelo local, cada una en su propia copia del proyecto.
+
+Además:
+
+- **[Memoria](#memoria-y-habilidades)**: recuerda lo que le pidas, sobre ti o
+  sobre cada proyecto, y nunca guarda nada sin tu permiso.
+- **[Habilidades](#memoria-y-habilidades)**: procedimientos en `SKILL.md`, los
+  tuyos o los que encuentres con su buscador.
+- **[Servidores MCP](#servidores-mcp)**: herramientas de otros programas y
+  servicios, en tu Mac o remotos, con buscador en el registro oficial.
 
 forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
@@ -75,7 +85,7 @@ enlace. La primera vez, macOS pide permiso para la red local.
   xcode-select --install
   ```
 
-- **Rust 1.88 o superior** (se usa la edición 2024). Si no lo tienes, la forma
+- **Rust 1.89 o superior** (se usa la edición 2024). Si no lo tienes, la forma
   recomendada es [rustup](https://rustup.rs):
 
   ```bash
@@ -96,7 +106,9 @@ enlace. La primera vez, macOS pide permiso para la red local.
   ```
 
 - **Opcional:** [Claude Code](https://claude.com/claude-code), Codex CLI o
-  Gemini CLI para la mesa, sus sesiones y el panel de consumo.
+  Gemini CLI para la mesa, sus sesiones y el panel de consumo. Los servidores MCP
+  que se lanzan con `npx` necesitan [Node](https://nodejs.org), y los de `uvx`,
+  [uv](https://docs.astral.sh/uv/).
 
 ## Instalación
 
@@ -164,7 +176,8 @@ Cierra forge antes y vuelve a abrirla después.
 ```bash
 cargo uninstall forge-app forge-usage
 rm -rf ~/Applications/Forge.app                  # si instalaste la app
-rm -rf ~/.config/forge ~/Library/Caches/forge    # configuración y caché (opcional)
+rm -rf ~/Library/Caches/forge                    # caché (opcional)
+rm -rf ~/.config/forge                           # configuración, tus habilidades y servidores MCP (opcional)
 rm -rf ~/Library/Application\ Support/forge      # conversaciones, memoria, sesiones y claves (opcional)
 ```
 
@@ -182,6 +195,10 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | «El servidor pide una clave» | La clave de forge no es la de `--api-key`. Menú de modelos › *Editar*. |
 | El modelo contesta, pero no usa las herramientas | Elige una carpeta; si ya la tienes, ese modelo o su plantilla no las admiten. |
 | Olvida detalles en tareas largas | El contexto se llena y se resume: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
+| Un servidor MCP no arranca | Falta el programa que lo lanza (`npx`, `uvx`, `docker`...). El panel *Servidores MCP* enseña su error. |
+| Un MCP remoto no deja iniciar sesión | No admite otros programas: crea una clave en su web y pégala en *Clave*. El transporte antiguo (SSE) no está soportado. |
+| Con MCP, el contexto se llena enseguida | Sus herramientas ocupan sitio: apaga las que no uses o actívalo solo en el proyecto que lo necesita. |
+| No encuentra una habilidad o un servidor | Los catálogos no los tienen todos: pega la dirección de GitHub, la carpeta o su JSON. |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
 | `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
@@ -193,8 +210,8 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 
 | Crate | Qué hace |
 |---|---|
-| `forge-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, y el sandbox de macOS con la ejecución de comandos |
-| `forge-app` | La app: render por GPU (wgpu + glyphon), chat, mesa, terminales con pestañas y paneles, panel de consumo, `forge.toml` con temas y atajos |
+| `forge-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, resumen del contexto, memoria y habilidades, cliente MCP (en el Mac y remoto, con OAuth), los buscadores del registro MCP y de skills.sh, y el sandbox de macOS con la ejecución de comandos |
+| `forge-app` | La app: render por GPU (wgpu + glyphon), chat con sus conversaciones guardadas, paneles de memoria, habilidades y MCP, mesa, terminales con pestañas y paneles, panel de consumo, `forge.toml` con temas y atajos |
 | `forge-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
 | `forge-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
 | `forge-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
@@ -335,6 +352,22 @@ retirar el permiso del todo, hazlo en la web del servicio.
 - Las **conversaciones** se guardan sin cifrar en
   `~/Library/Application Support/forge/chat.d`, también solo para ti, con lo que
   el modelo haya leído de tus archivos. Borrarlas en forge las borra del disco.
+
+#### Qué sale de tu Mac
+
+Por sí solo, forge habla únicamente con tu servidor de modelos. Lo demás solo
+ocurre si tú lo haces, lo añades o lo permites:
+
+| Cuándo | Adónde va | Qué |
+|---|---|---|
+| Al buscar un servidor MCP | `registry.modelcontextprotocol.io` | Lo que escribes |
+| Al buscar una habilidad | `skills.sh` | Lo que escribes |
+| Al traer una habilidad | GitHub | Qué repositorio |
+| Con un servidor MCP remoto activo | Ese servicio, y donde inicies sesión | Lo que el modelo le mande: se te enseña antes, salvo en las herramientas que marques con *Siempre* |
+| Con un servidor MCP activo en tu Mac | Lo que decida ese programa | Se ejecuta con tus permisos y con red |
+| Si tus tests usan red (`[verify] network`) | Lo que hagan esos tests | Podrían enviar lo que pueden leer |
+| Si permites un comando *Fuera del sandbox* | Lo que haga ese comando | Se te enseña antes |
+| Si usas Claude Code, Codex CLI o Gemini CLI | Su proveedor | Lo que haga ese asistente, con su cuenta |
 
 ### La mesa (⌘E)
 
@@ -582,6 +615,7 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets
+cargo test -p forge-agent live -- --ignored     # contra el registro MCP y skills.sh de verdad (necesita red)
 cargo run --release -p forge-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
 FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app   # vuelca un frame a PNG
 FORGE_PROVIDER=codex cargo run --release -p forge-app               # arranca con ese asistente
@@ -593,6 +627,7 @@ FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-a
 FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
 FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
 FORGE_CAPTURE_CHAT="1500:hola" FORGE_CHAT_STATE=/tmp/chat.json FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # el chat
+FORGE_CAPTURE_CHAT=$'1500:!skill\n2200:!keys pdf\n2800:!fetch' FORGE_SKILLS=/tmp/skills FORGE_MCP=/tmp/mcp.json FORGE_CHAT_STATE=/tmp/chat.json FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # los paneles, sin tocar tus habilidades ni tus MCP
 FORGE_CAPTURE_BOARD=1 FORGE_CAPTURE_LAUNCH="tarea" FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # la mesa, lanzando una tarea
 FORGE_CAPTURE_WORKTREE=1 FORGE_CAPTURE_AI=1 FORGE_CAPTURE_REVIEW=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # agente en worktree y panel ⌘R
 echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
