@@ -16,6 +16,8 @@ use forge_agent::api::{Msg, Server, Stats};
 use forge_agent::tools::Detail;
 use serde::{Deserialize, Serialize};
 
+use crate::worktree::Worktree;
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Saved {
@@ -24,6 +26,8 @@ pub struct Saved {
     pub model: Option<(String, String)>,
     pub project: Option<PathBuf>,
     pub recents: Vec<PathBuf>,
+    /// Quién hace las tareas de la mesa.
+    pub worker: Option<String>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -55,7 +59,7 @@ impl Saved {
 }
 
 /// Versión del formato de las conversaciones.
-const VERSION: u32 = 1;
+pub const VERSION: u32 = 1;
 
 /// Ficha de una conversación.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +67,12 @@ pub struct Meta {
     pub v: u32,
     pub title: String,
     pub root: Option<PathBuf>,
+    /// Copia del proyecto hecha para ella.
+    #[serde(default)]
+    pub worktree: Option<Worktree>,
+    /// Su trabajo ya se fusionó o se descartó.
+    #[serde(default)]
+    pub settled: bool,
     /// Último cambio, en segundos desde 1970.
     pub updated: i64,
 }
@@ -128,9 +138,8 @@ pub fn load(p: &Path) -> Result<Stored, String> {
     serde_json::from_str(body).map_err(|e| e.to_string())
 }
 
-pub fn store(p: &Path, title: &str, root: Option<&Path>, updated: i64, body: &Stored) -> std::io::Result<()> {
-    let meta = Meta { v: VERSION, title: title.into(), root: root.map(Path::to_path_buf), updated };
-    write_private(p, &format!("{}\n{}\n", serde_json::to_string(&meta)?, serde_json::to_string(body)?))
+pub fn store(p: &Path, meta: &Meta, body: &Stored) -> std::io::Result<()> {
+    write_private(p, &format!("{}\n{}\n", serde_json::to_string(meta)?, serde_json::to_string(body)?))
 }
 
 /// Escribe de una vez (archivo nuevo y cambio de nombre), solo para el usuario.
@@ -187,7 +196,21 @@ mod tests {
             ],
         };
         let p = dir.join("1.json");
-        store(&p, "Un título\ncon salto", Some(Path::new("/x")), 7, &body).unwrap();
+        let wt = Worktree {
+            path: "/x.worktrees/agente-1".into(),
+            repo: "/x".into(),
+            branch: "forge/agente-1".into(),
+            base: "abc".into(),
+        };
+        let meta = Meta {
+            v: VERSION,
+            title: "Un título\ncon salto".into(),
+            root: Some(wt.path.clone()),
+            worktree: Some(wt.clone()),
+            settled: false,
+            updated: 7,
+        };
+        store(&p, &meta, &body).unwrap();
         assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
         // Basura, versiones futuras y restos no estorban.
         std::fs::write(dir.join("2.json"), "{mal").unwrap();
@@ -195,6 +218,10 @@ mod tests {
         std::fs::write(dir.join("4.tmp"), "").unwrap();
         let l = list_in(&dir);
         assert_eq!(l.len(), 1);
+        assert_eq!(l[0].1.worktree, Some(wt));
+        // Las de antes de que hubiera copias se siguen leyendo.
+        std::fs::write(dir.join("5.json"), r#"{"v":1,"title":"vieja","root":null,"updated":1}"#).unwrap();
+        assert_eq!(list_in(&dir).len(), 2);
         assert_eq!((l[0].1.title.as_str(), l[0].1.updated), ("Un título\ncon salto", 7));
         assert_eq!(load(&p).unwrap(), body);
         // Un archivo a medias es un error, no una conversación vacía.

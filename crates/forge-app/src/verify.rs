@@ -322,6 +322,18 @@ pub fn fix_prompt(r: &Report) -> Option<String> {
     ))
 }
 
+/// Como `fix_prompt`, con el final de la salida: un modelo local no puede
+/// leer el registro, que está fuera de su carpeta.
+pub fn fix_prompt_with_output(r: &Report) -> Option<String> {
+    let base = fix_prompt(&Report { log: None, ..r.clone() })?;
+    let text = r.log.as_ref().and_then(|l| std::fs::read_to_string(l).ok()).unwrap_or_default();
+    let mut from = text.len().saturating_sub(6_000);
+    while !text.is_char_boundary(from) {
+        from += 1;
+    }
+    Some(format!("{base}\n\nSalida (el final):\n```\n{}\n```", text[from..].trim()))
+}
+
 /// Una verificación en curso o terminada, por panel.
 #[derive(Debug, Clone)]
 pub struct Verify {
@@ -485,6 +497,22 @@ mod tests {
         assert!(is_sensitive("scripts/ci.sh", "./scripts/ci.sh --rapido"));
         assert!(listed("/a/b\n/c\n", Path::new("/c")));
         assert!(!listed("/a/b\n", Path::new("/a")));
+    }
+
+    #[test]
+    fn fix_prompt_carries_the_end_of_the_output() {
+        let log = std::env::temp_dir().join(format!("forge-fix-{}.log", std::process::id()));
+        std::fs::write(&log, format!("{}ñFALLO FINAL", "ñ".repeat(9000))).unwrap();
+        let r = Report {
+            cmd: Some("cargo test".into()),
+            outcome: Outcome::Failed("No compila".into()),
+            took: Duration::ZERO,
+            log: Some(log.clone()),
+            network: false,
+        };
+        let p = fix_prompt_with_output(&r).unwrap();
+        assert!(p.contains("FALLO FINAL") && p.len() < 7_000 && !p.contains("completa está en"));
+        let _ = std::fs::remove_file(log);
     }
 
     #[test]

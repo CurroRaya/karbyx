@@ -164,6 +164,8 @@ pub enum Hit {
     BoardChatAnswer(u64, u64, bool),
     /// Mesa: selector de proyecto y botón de lanzar.
     BoardProject,
+    /// Mesa: quién hará la tarea.
+    BoardWorker,
     BoardLaunch,
     /// Ir al chat o a las terminales.
     OpenChat,

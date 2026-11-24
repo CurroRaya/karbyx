@@ -10,6 +10,8 @@ pub mod md;
 pub mod store;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use forge_agent::agent::{Agent, Ask, Decision, Event, Setup};
@@ -20,7 +22,9 @@ use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
 
 use crate::gfx::TextPos;
+use crate::owner;
 use crate::ui::{Area, Hit};
+use crate::worktree::Worktree;
 use crate::{App, PaneKind, Spawn, UserEvent};
 use edit::{Editor, Move};
 use forge_ai::Provider;
@@ -58,6 +62,8 @@ pub enum ChatHit {
     CopyAnswer(u16),
     /// Resumir la conversación ahora.
     Compact,
+    /// Revisar los cambios de su copia.
+    Review,
     CopyCommand(u8),
     Suggest(u8),
     Bottom,
@@ -174,6 +180,10 @@ pub struct Chat {
     pub input: Editor,
     pub phase: Phase,
     pub root: Option<PathBuf>,
+    /// Copia del proyecto donde trabaja, si se lanzó desde la mesa.
+    pub worktree: Option<Worktree>,
+    /// Su trabajo ya se fusionó o se descartó: no hay nada que revisar.
+    settled: bool,
     pub stats: Option<Stats>,
     /// Mensaje escrito mientras trabajaba: se envía al acabar.
     pub queued: Option<String>,
@@ -205,6 +215,8 @@ impl Chat {
             input: Editor::default(),
             phase: Phase::Idle,
             root: None,
+            worktree: None,
+            settled: false,
             stats: None,
             queued: None,
             unseen: false,
@@ -232,6 +244,12 @@ impl Chat {
 
     pub fn auto(&self) -> bool {
         self.agent.as_ref().is_some_and(Agent::auto)
+    }
+
+    /// Nombre del proyecto (el del repositorio, si trabaja en una copia).
+    pub fn project(&self) -> String {
+        let dir = self.worktree.as_ref().map(|w| &w.repo).or(self.root.as_ref());
+        dir.map_or_else(|| "sin carpeta".into(), |p| folder_name(p))
     }
 
     /// Nueva y sin usar.
@@ -329,7 +347,15 @@ impl Chat {
             self.file = store::new_file();
         }
         let Some(f) = &self.file else { return Ok(()) };
-        store::store(f, &self.title, self.root.as_deref(), self.updated, &self.stored())
+        let meta = store::Meta {
+            v: store::VERSION,
+            title: self.title.clone(),
+            root: self.root.clone(),
+            worktree: self.worktree.clone(),
+            settled: self.settled,
+            updated: self.updated,
+        };
+        store::store(f, &meta, &self.stored())
     }
 
     fn tool(&mut self, id: u64) -> Option<&mut ToolItem> {
@@ -492,6 +518,11 @@ pub struct ChatCard {
     pub id: u64,
     pub title: String,
     pub project: String,
+    /// Su copia del proyecto; cambios y verificación, si los hay.
+    pub branch: Option<String>,
+    pub stats: Option<crate::board::Stats>,
+    pub verify: Option<crate::board::Badge>,
+    pub can_verify: bool,
     pub detail: String,
     /// Última línea de la respuesta.
     pub last: String,
@@ -502,6 +533,13 @@ pub struct ChatCard {
     pub unseen: bool,
     pub used: Option<u32>,
     pub since: i64,
+}
+
+impl ChatCard {
+    /// Lleva la fila de verificación.
+    pub fn has_badge(&self) -> bool {
+        self.branch.is_some() && (self.verify.is_some() || self.can_verify)
+    }
 }
 
 /// Menú o formulario abierto sobre el chat.
@@ -561,7 +599,10 @@ impl Chats {
             .enumerate()
             .map(|(i, (file, m))| Chat {
                 title: m.title,
-                root: m.root,
+                // Si su copia ya no existe, se queda como conversación.
+                worktree: m.worktree.clone().filter(|w| w.path.is_dir()),
+                root: m.root.filter(|r| m.worktree.is_none() || r.is_dir()),
+                settled: m.settled,
                 updated: m.updated,
                 file: Some(file),
                 loaded: false,
@@ -589,6 +630,10 @@ impl Chats {
         let mut v: Vec<usize> = (0..self.list.len()).filter(|i| !self.list[*i].blank()).collect();
         v.sort_by_key(|i| std::cmp::Reverse((self.list[*i].updated, self.list[*i].id)));
         v
+    }
+
+    pub fn by_id(&self, id: u64) -> Option<&Chat> {
+        self.list.iter().find(|c| c.id == id)
     }
 
     pub fn current(&self) -> Option<&Chat> {
@@ -626,6 +671,20 @@ impl Chats {
             || self.toast.is_some()
             || self.servers.iter().any(|s| s.status == Status::Checking)
     }
+}
+
+/// Última línea de texto de una respuesta (no de su código).
+fn last_line(t: &str) -> Option<&str> {
+    let mut code = false;
+    let mut last = None;
+    for l in t.lines().map(str::trim) {
+        if l.starts_with("```") {
+            code = !code;
+        } else if !code && l.chars().any(char::is_alphanumeric) {
+            last = Some(l);
+        }
+    }
+    last
 }
 
 /// Nombre corto de una carpeta.
@@ -699,23 +758,28 @@ impl App {
         }));
     }
 
+    /// La lee del disco, si hace falta.
+    fn load_chat(&mut self, i: usize) -> Result<(), String> {
+        let c = self.chats.list.get_mut(i).ok_or("Esa conversación ya no existe")?;
+        if !c.loaded {
+            let f = c.file.as_ref().ok_or("Esa conversación no está guardada")?;
+            // Si no se entiende, el archivo no se toca.
+            let s = store::load(f).map_err(|e| {
+                log::warn!("{}: {e}", f.display());
+                "No se puede leer esa conversación"
+            })?;
+            c.restore(s);
+            c.loaded = true;
+        }
+        Ok(())
+    }
+
     /// Abre una conversación, leyéndola del disco si hace falta.
     fn open_chat(&mut self, i: usize) {
-        let Some(c) = self.chats.list.get_mut(i) else { return };
-        if !c.loaded {
-            let Some(f) = &c.file else { return };
-            match store::load(f) {
-                Ok(s) => {
-                    c.restore(s);
-                    c.loaded = true;
-                }
-                Err(e) => {
-                    // El archivo no se toca.
-                    log::warn!("{}: {e}", f.display());
-                    return self.toast("No se puede leer esa conversación");
-                }
-            }
+        if let Err(e) = self.load_chat(i) {
+            return self.toast(e);
         }
+        let Some(c) = self.chats.list.get_mut(i) else { return };
         c.unseen = false;
         c.stick = true;
         self.chats.cur = i;
@@ -848,7 +912,12 @@ impl App {
         } else if c.asking().is_some() {
             c.unseen = true;
         }
+        // Terminó por su cuenta y sin errores: toca verificarlo.
+        let ended = done
+            && c.worktree.is_some()
+            && !matches!(c.items.last().map(|i| &i.body), Some(Body::Error(_) | Body::Notice(_)));
         let queued = if done { c.queued.take() } else { None };
+        let idle = queued.is_none();
         if let Some(n) = notice
             && queued.is_none()
             && (!self.focused || self.occluded)
@@ -864,6 +933,10 @@ impl App {
         }
         if failed {
             self.probe_servers();
+        }
+        if ended && idle && self.config.verify.auto {
+            self.start_verify(owner::of_chat(id), true);
+            self.refresh_board_stats();
         }
         self.redraw();
     }
@@ -892,13 +965,19 @@ impl App {
         }
         c.items.push(Item::new(Body::User(text.clone())));
         c.phase = Phase::Reading(Instant::now());
+        c.settled = false;
         c.stick = true;
         c.sel = None;
         let root = c.root.clone();
         if let Some(a) = &mut c.agent {
-            a.prompt(text, Setup { server, model, ctx, root: root.clone() });
+            let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
+            a.prompt(text, Setup { server, model, ctx, root: root.clone(), copy_of });
         }
-        if let Some(p) = root {
+        let (id, copy) = (c.id, c.worktree.is_some());
+        if copy {
+            // Vuelve a trabajar: lo verificado ya no vale.
+            self.stop_verify(owner::of_chat(id));
+        } else if let Some(p) = root {
             self.chats.saved.used_project(p);
             self.chats.saved.save();
         }
@@ -910,11 +989,85 @@ impl App {
         let (server, model, ctx) = (server.clone(), model.id.clone(), model.ctx);
         let Some(c) = self.chats.current_mut().filter(|c| !c.busy() && !c.items.is_empty()) else { return };
         let root = c.root.clone();
+        let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
         if let Some(a) = &mut c.agent {
-            a.compact(Setup { server, model, ctx, root });
+            a.compact(Setup { server, model, ctx, root, copy_of });
             c.phase = Phase::Compacting(Instant::now());
             c.stick = true;
         }
+    }
+
+    /// Conversación nueva con una tarea, desde la mesa. En una copia del
+    /// proyecto trabaja sin preguntar; si no, pregunta. Devuelve cuál es.
+    pub(super) fn launch_chat(&mut self, task: String, root: PathBuf, worktree: Option<Worktree>) -> u64 {
+        let id = self.chats.next;
+        self.chats.next += 1;
+        let copy = worktree.is_some();
+        self.chats.list.push(Chat { root: Some(root), worktree, ..Chat::empty(id) });
+        let i = self.chats.list.len() - 1;
+        self.start_agent(i);
+        if let Some(a) = &self.chats.list[i].agent {
+            a.set_auto(copy);
+        }
+        self.send_to(i, task);
+        self.save_chat(i);
+        id
+    }
+
+    /// Le dice algo a una conversación desde la mesa.
+    pub(super) fn say_to_chat(&mut self, id: u64, text: String) -> Result<(), String> {
+        let i = self.chats.list.iter().position(|c| c.id == id).ok_or("Esa conversación ya no existe")?;
+        self.load_chat(i)?;
+        if self.chats.list[i].busy() {
+            return Err("El modelo está trabajando; espera a que termine".into());
+        }
+        if self.chats.model().is_none() {
+            self.probe_servers();
+            return Err("Tu modelo local no responde".into());
+        }
+        self.chats.list[i].unseen = false;
+        self.send_to(i, text);
+        Ok(())
+    }
+
+    pub(super) fn set_chat_base(&mut self, id: u64, head: &str) {
+        let Some(i) = self.chats.list.iter().position(|c| c.id == id) else { return };
+        if let Some(w) = &mut self.chats.list[i].worktree {
+            w.base = head.to_string();
+        }
+        self.chats.list[i].settled = true;
+        if self.load_chat(i).is_ok() {
+            self.save_chat(i);
+        }
+    }
+
+    /// Se va a borrar una copia: para a quien trabaje en ella y la olvida.
+    /// Devuelve las marcas de «sigue trabajando».
+    pub(super) fn leave_worktree(&mut self, wt: &Worktree) -> Vec<Arc<AtomicBool>> {
+        let mut flags = Vec::new();
+        for i in 0..self.chats.list.len() {
+            let c = &self.chats.list[i];
+            let inside = c.root.as_ref().is_some_and(|r| r.starts_with(&wt.path));
+            if !inside && c.worktree.as_ref() != Some(wt) {
+                continue;
+            }
+            if let Some(a) = &c.agent {
+                a.stop();
+                flags.push(a.working_flag());
+            }
+            let loaded = self.load_chat(i).is_ok();
+            let c = &mut self.chats.list[i];
+            c.queued = None;
+            (c.worktree, c.root, c.settled) = (None, None, true);
+            if c.busy() {
+                c.phase = Phase::Stopping;
+            }
+            c.items.push(Item::new(Body::Notice("Su copia del proyecto se ha borrado.".into())));
+            if loaded {
+                self.save_chat(i);
+            }
+        }
+        flags
     }
 
     /// Abre el chat en una conversación (desde la mesa).
@@ -938,12 +1091,12 @@ impl App {
         order
             .into_iter()
             .map(|i| &self.chats.list[i])
-            .filter(|c| c.agent.is_some() || c.updated >= today)
+            .filter(|c| (c.agent.is_some() || c.updated >= today) && (!c.settled || c.busy()))
             .take(12)
             .map(|c| {
                 let ask = c.asking();
                 let last = c.items.iter().rev().find_map(|i| match &i.body {
-                    Body::Assistant(t) => t.lines().map(str::trim).rfind(|l| !l.is_empty()),
+                    Body::Assistant(t) => last_line(t),
                     _ => None,
                 });
                 let detail = match (ask, &c.phase) {
@@ -968,7 +1121,11 @@ impl App {
                 ChatCard {
                     id: c.id,
                     title: c.title.clone(),
-                    project: c.root.as_deref().map_or_else(|| "sin carpeta".into(), folder_name),
+                    project: c.project(),
+                    branch: c.worktree.as_ref().map(|w| w.name().to_string()),
+                    stats: None,
+                    verify: None,
+                    can_verify: false,
                     detail,
                     last: last.unwrap_or_default().trim_start_matches(['#', '-', '*', '>', ' ']).to_string(),
                     ask: ask.map(|t| t.id),
@@ -1163,6 +1320,10 @@ impl App {
                     self.chats.confirm = Some(id);
                 } else if let Some(i) = self.chats.list.iter().position(|c| c.id == id) {
                     let gone = self.chats.list.remove(i);
+                    if let Some(w) = &gone.worktree {
+                        // El trabajo no se borra con la conversación.
+                        self.toast(format!("Su copia sigue en {}", w.name()));
+                    }
                     if let Some(f) = &gone.file
                         && let Err(e) = std::fs::remove_file(f)
                         && e.kind() != std::io::ErrorKind::NotFound
@@ -1259,6 +1420,7 @@ impl App {
                 }
             }
             ChatHit::Compact => self.compact_chat(),
+            ChatHit::Review => self.toggle_review(),
             ChatHit::CopyCommand(w) => {
                 if let Popup::Form(f) = &mut self.chats.popup {
                     // La clave sugerida se usa también para conectar.
@@ -1629,6 +1791,20 @@ impl App {
                     self.chat_click(ChatHit::Delete(id));
                 }
             }
+            t if t.starts_with("!task ") => {
+                self.board.input = t[6..].to_string();
+                self.board_launch();
+            }
+            t @ ("!verify" | "!review" | "!fix") => {
+                if let Some(o) = self.chats.recent().first().map(|i| owner::of_chat(self.chats.list[*i].id)) {
+                    match t {
+                        "!verify" => self.start_verify(o, false),
+                        "!fix" => self.board_fix(o),
+                        _ => self.open_review(o),
+                    }
+                }
+            }
+            "!merge" => self.review_merge(),
             "!compact" => self.compact_chat(),
             "!board" => self.show_board(true),
             "!side" => self.chats.side_scroll = 520.0,
@@ -1675,5 +1851,17 @@ impl App {
             Hit::Chat(h) => Some(h),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_line_skips_code() {
+        assert_eq!(last_line("Hecho:\n```py\nx = 1\n```\n"), Some("Hecho:"));
+        assert_eq!(last_line("uno\n\n- dos\n---"), Some("- dos"));
+        assert_eq!(last_line("```\nsolo código"), None);
     }
 }

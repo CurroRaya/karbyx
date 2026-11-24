@@ -24,6 +24,9 @@ const MAX_HITS: usize = 120;
 pub struct Ctx {
     /// Carpeta del proyecto (ruta real).
     pub root: PathBuf,
+    /// Proyecto del que sale la carpeta (ella misma, o el repositorio si es
+    /// una copia): decide la caché de compilación.
+    pub project: PathBuf,
     /// Caracteres máximos de un resultado (según el contexto del modelo).
     pub max_chars: usize,
 }
@@ -37,7 +40,7 @@ impl Ctx {
         if home.is_some_and(|h| h.starts_with(&root)) || root.parent().is_none() {
             return None;
         }
-        Some(Self { root, max_chars })
+        Some(Self { project: root.clone(), root, max_chars })
     }
 }
 
@@ -657,7 +660,7 @@ pub fn execute(
             let spec = exec::Spec {
                 cmd,
                 dir: &ctx.root,
-                project: &ctx.root,
+                project: &ctx.project,
                 sandboxed: *sandboxed,
                 network: false,
                 timeout: *timeout,

@@ -835,9 +835,9 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
         let tx = a.x + ui.s(12.0);
         let tw = a.w - ui.s(44.0);
         ui.text(&c.title, tx, a.y + ui.s(6.0), tw, 13.0, TEXT, i == chats.cur || c.unseen, Align::Left);
-        let sub = match &c.root {
-            Some(p) => folder_name(p),
-            None => "sin carpeta".into(),
+        let sub = match &c.worktree {
+            Some(w) => format!("{} · ⎇ {}", c.project(), w.name()),
+            None => c.project(),
         };
         ui.text(sub, tx, a.y + ui.s(26.0), tw, 11.0, FAINT, false, Align::Left);
         let x_box = Area::new(a.right() - ui.s(30.0), a.y + ui.s(12.0), ui.s(24.0), ui.s(24.0));
@@ -966,6 +966,13 @@ pub fn draw_chat(
         ui.fill(Area::new(area.x, view.bottom(), area.w, area.bottom() - view.bottom()), BG);
         ui.fill(Area::new(area.x, area.y + head - 1.0, area.w, 1.0), [0x1e, 0x1a, 0x17]);
         ui.text(&c.title, x, area.y + ui.s(15.0), col_w - ui.s(230.0), 13.0, DIM, true, Align::Left);
+    }
+    if c.worktree.is_some() {
+        let b = Area::new(x + col_w - ui.s(150.0), area.y + ui.s(10.0), ui.s(150.0), ui.s(28.0));
+        let hov = env.hover == Some(ChatHit::Review);
+        ui.round(b, ui::GREEN, if hov { 0.26 } else { 0.13 }, 8.0);
+        ui.text("Revisar cambios ⌘R", b.x, b.y + ui.s(6.0), b.w, 11.5, ui::GREEN, true, Align::Center);
+        ui.hits.insert(0, (b, Hit::Chat(ChatHit::Review)));
     }
     ui.rects.extend(box_rects);
     if let Some((t, _)) = &chats.toast {
@@ -1334,7 +1341,11 @@ fn composer(
             ui.hit(b, Hit::Chat(hit));
             x += w + ui.s(4.0);
         };
-    let folder = c.root.as_deref().map(folder_name).unwrap_or_else(|| "Sin carpeta".into());
+    let folder = match (&c.worktree, &c.root) {
+        (Some(w), _) => format!("{} ⎇ {}", c.project(), w.name()),
+        (None, Some(p)) => folder_name(p),
+        (None, None) => "Sin carpeta".into(),
+    };
     pill(ui, gfx, "⌂", EMBER, &folder, ChatHit::ProjectMenu, DIM, ui.s(200.0));
     let (name, nc) = match model {
         Some((n, ..)) => (n.as_str(), DIM),

@@ -13,6 +13,7 @@ mod gfx;
 mod input;
 mod keys;
 mod mcp;
+mod owner;
 mod panes;
 mod query;
 mod rects;
@@ -1016,6 +1017,7 @@ impl App {
             | Hit::BoardFix(_)
             | Hit::BoardVerifyEnable(_)
             | Hit::BoardProject
+            | Hit::BoardWorker
             | Hit::BoardLaunch => self.board_click(hit),
         }
         self.redraw();
@@ -2124,6 +2126,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Chat(id, e) => self.on_chat_event(id, e),
             UserEvent::Probe(server, r) => self.on_probe(*server, r),
             UserEvent::Folder(p) => self.set_chat_project(Some(p)),
+            UserEvent::ChatSay(t) if t == "!discard" => self.review_click(Hit::ReviewDiscard, event_loop),
             UserEvent::ChatSay(t) => self.chat_say(t),
             UserEvent::WritePane(pane, bytes) => {
                 if let Some(p) = self.panes.get_mut(&pane) {

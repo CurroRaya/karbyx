@@ -25,7 +25,13 @@ fn main() {
     let (tx, rx) = mpsc::channel();
     let mut agent = Agent::spawn(vec![], move |e| drop(tx.send(e)));
     agent.set_auto(true);
-    let setup = Setup { server, model: models[0].id.clone(), ctx: models[0].ctx, root: Some(root.into()) };
+    let setup = Setup {
+        server,
+        model: models[0].id.clone(),
+        ctx: models[0].ctx,
+        root: Some(root.into()),
+        copy_of: None,
+    };
     agent.prompt(task.clone(), setup);
     for e in rx {
         match e {

@@ -19,7 +19,7 @@ const MAX_NEW_FILE: u64 = 256 * 1024;
 const MAX_LINES: usize = 5000;
 
 /// Worktree de un agente.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Worktree {
     /// Carpeta del worktree (donde trabaja el agente).
     pub path: PathBuf,

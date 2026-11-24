@@ -36,6 +36,8 @@ pub struct Setup {
     pub ctx: Option<u32>,
     /// Sin carpeta es un chat normal, sin herramientas.
     pub root: Option<PathBuf>,
+    /// Si la carpeta es una copia hecha para esta tarea, su repositorio.
+    pub copy_of: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +163,11 @@ impl Agent {
         self.working.load(Ordering::Acquire)
     }
 
+    /// Se pone a `false` cuando acaba el turno en curso.
+    pub fn working_flag(&self) -> Arc<AtomicBool> {
+        self.working.clone()
+    }
+
     /// Modo automático: edita en el proyecto y ejecuta en el sandbox sin preguntar.
     pub fn set_auto(&self, on: bool) {
         self.auto.store(on, Ordering::Relaxed);
@@ -237,7 +244,10 @@ impl Worker {
     fn work(&mut self, text: String, setup: &Setup) -> Result<(), ApiError> {
         // Un resultado razonable es, como mucho, una cuarta parte del contexto.
         let max_chars = (setup.ctx.unwrap_or(32_768) as usize * 3 / 4).clamp(4_000, 60_000);
-        let ctx = setup.root.as_deref().and_then(|r| Ctx::new(r, max_chars));
+        let mut ctx = setup.root.as_deref().and_then(|r| Ctx::new(r, max_chars));
+        if let (Some(c), Some(repo)) = (&mut ctx, &setup.copy_of) {
+            c.project = repo.clone();
+        }
         let defs = if ctx.is_some() { tools::definitions() } else { Vec::new() };
         let system = Msg::System(system_prompt(ctx.as_ref()));
         match self.history.first_mut() {
@@ -582,6 +592,11 @@ fn system_prompt(ctx: Option<&Ctx>) -> String {
          - When you finish, say briefly what you changed and what you could not check. Do not claim something works unless you ran it.\n",
         root = ctx.root.display()
     );
+    if ctx.project != ctx.root {
+        s.push_str(
+            "- This folder is a copy (git worktree) made for this task. The user will review and merge it: do not commit, and finish the task without asking unless you are blocked.\n",
+        );
+    }
     for name in ["AGENTS.md", "CLAUDE.md"] {
         let p = ctx.root.join(name);
         // Nada de enlaces: podrían apuntar fuera del proyecto.
@@ -660,8 +675,13 @@ mod tests {
             Self { agent: Agent::spawn(vec![], move |e| drop(tx.send(e))), rx }
         }
         fn send(&mut self, server: &Server, root: &std::path::Path) {
-            let setup =
-                Setup { server: server.clone(), model: "m".into(), ctx: Some(8192), root: Some(root.into()) };
+            let setup = Setup {
+                server: server.clone(),
+                model: "m".into(),
+                ctx: Some(8192),
+                root: Some(root.into()),
+                copy_of: None,
+            };
             self.agent.prompt("haz algo".into(), setup);
         }
         /// Hasta el final del turno, contestando `d` a cada permiso.

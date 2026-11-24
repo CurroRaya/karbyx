@@ -18,6 +18,7 @@ use winit::keyboard::{Key, NamedKey};
 use super::{App, PaneKind, Spawn, UserEvent, ago, project_root, state_text};
 use crate::agents::AgentState;
 use crate::chat::ChatCard;
+use crate::owner;
 use crate::panes::PaneId;
 use crate::ui::{self, Align, Area, Hit, Rgb, Ui};
 use crate::usage::UsageState;
@@ -70,6 +71,33 @@ pub struct Badge {
     pub cmd: Option<String>,
     pub since: Instant,
     pub took: Option<Duration>,
+}
+
+impl Badge {
+    fn of(v: &Verify) -> Self {
+        Self {
+            outcome: v.report.as_ref().map(|r| r.outcome.clone()),
+            cmd: v.report.as_ref().and_then(|r| r.cmd.clone()),
+            since: v.since,
+            took: v.report.as_ref().map(|r| r.took),
+        }
+    }
+}
+
+/// Quién puede hacer una tarea.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Worker {
+    Local,
+    Ai(Provider),
+}
+
+impl Worker {
+    fn id(self) -> &'static str {
+        match self {
+            Worker::Local => "local",
+            Worker::Ai(p) => p.command(),
+        }
+    }
 }
 
 /// Una tarjeta de agente.
@@ -284,6 +312,8 @@ pub struct BoardView {
     pub shells: Vec<ShellChip>,
     pub input: String,
     pub project: String,
+    /// Quién hará la tarea.
+    pub worker: String,
     pub selected: Option<PaneId>,
     pub today: u64,
     pub notice: Option<(String, bool)>,
@@ -405,12 +435,7 @@ impl App {
                     unseen: a.is_some_and(|a| a.unseen),
                     choice,
                     thumb: thumb(&p.session.snapshot(), 48),
-                    verify: self.board.verify.get(&id).map(|v| Badge {
-                        outcome: v.report.as_ref().map(|r| r.outcome.clone()),
-                        cmd: v.report.as_ref().and_then(|r| r.cmd.clone()),
-                        since: v.since,
-                        took: v.report.as_ref().map(|r| r.took),
-                    }),
+                    verify: self.board.verify.get(&id).map(Badge::of),
                     can_verify: p.worktree.is_some()
                         && state.is_some_and(|s| s != AgentState::Working)
                         && self.board.stats.get(&id).is_some_and(|s| s.2 > 0),
@@ -418,7 +443,11 @@ impl App {
             }
         }
         let mut chats: [Vec<ChatCard>; 3] = Default::default();
-        for c in self.chat_cards() {
+        for mut c in self.chat_cards() {
+            let id = owner::of_chat(c.id);
+            c.stats = self.board.stats.get(&id).copied();
+            c.verify = self.board.verify.get(&id).map(Badge::of);
+            c.can_verify = !c.busy && c.branch.is_some() && c.stats.is_some_and(|s| s.2 > 0);
             let col = if c.ask.is_some() {
                 1
             } else if c.busy {
@@ -433,6 +462,12 @@ impl App {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "~".into());
         let today_start = Local::now().date_naive();
+        let worker = match self.board_worker() {
+            Worker::Ai(p) => p.name().to_string(),
+            Worker::Local => {
+                self.chats.model().map_or_else(|| "modelo local".into(), |(_, m)| m.name.clone())
+            }
+        };
         BoardView {
             columns,
             chats,
@@ -447,6 +482,7 @@ impl App {
             shells,
             input: self.board.input.clone(),
             project,
+            worker,
             selected: self.board.sel,
             today: usage.views.iter().map(|v| v.today).sum(),
             notice: self.board.notice.clone(),
@@ -456,7 +492,12 @@ impl App {
     /// Paneles de las tarjetas en orden (columna a columna), para ↑↓.
     fn board_order(&self) -> Vec<PaneId> {
         let v = self.board_view(&UsageState::default());
-        v.columns.iter().flatten().map(|c| c.pane).collect()
+        (0..3)
+            .flat_map(|i| {
+                let chats = v.chats[i].iter().map(|c| owner::of_chat(c.id));
+                chats.chain(v.columns[i].iter().map(|c| c.pane))
+            })
+            .collect()
     }
 
     pub(super) fn show_board(&mut self, on: bool) {
@@ -480,7 +521,10 @@ impl App {
         let jobs: Vec<(PaneId, PathBuf, String)> = self
             .panes
             .iter()
-            .filter_map(|(id, p)| p.worktree.as_ref().map(|w| (*id, w.path.clone(), w.base.clone())))
+            .filter_map(|(id, p)| Some((*id, p.worktree.as_ref()?)))
+            .chain(self.chats.list.iter().filter_map(|c| Some((owner::of_chat(c.id), c.worktree.as_ref()?))))
+            .filter(|(_, w)| w.path.is_dir())
+            .map(|(id, w)| (id, w.path.clone(), w.base.clone()))
             .collect();
         self.board.stats_at = Some(Instant::now());
         if jobs.is_empty() {
@@ -511,14 +555,11 @@ impl App {
 
     pub(super) fn tick_board(&mut self) {
         // Verificaciones de agentes que ya no están.
-        let panes = &self.panes;
-        self.board.verify.retain(|id, v| {
-            let keep = panes.get(id).is_some_and(|p| p.worktree.is_some());
-            if !keep {
-                v.stop();
-            }
-            keep
-        });
+        let gone: Vec<PaneId> =
+            self.board.verify.keys().copied().filter(|id| self.worktree_of(*id).is_none()).collect();
+        for id in gone {
+            self.stop_verify(id);
+        }
         if self.board_visible && self.board.stats_at.is_none_or(|t| t.elapsed() >= STATS_EVERY) {
             self.refresh_board_stats();
         }
@@ -530,11 +571,7 @@ impl App {
         let Some(p) = self.panes.get(&pane) else { return };
         let Some(a) = &p.agent else { return };
         match a.state {
-            AgentState::Working => {
-                if let Some(v) = self.board.verify.remove(&pane) {
-                    v.stop();
-                }
-            }
+            AgentState::Working => self.stop_verify(pane),
             AgentState::Done
                 if before == Some(AgentState::Working)
                     && a.from_hooks
@@ -547,10 +584,17 @@ impl App {
         }
     }
 
+    /// Lo verificado ya no vale.
+    pub(super) fn stop_verify(&mut self, owner: PaneId) {
+        if let Some(v) = self.board.verify.remove(&owner) {
+            v.stop();
+        }
+    }
+
     /// Verifica en segundo plano el worktree del agente. `auto`: nadie lo ha
     /// pedido, así que solo se ejecuta si el proyecto lo tiene activado.
     pub(super) fn start_verify(&mut self, pane: PaneId, auto: bool) {
-        let Some(wt) = self.panes.get(&pane).and_then(|p| p.worktree.clone()) else { return };
+        let Some(wt) = self.worktree_of(pane) else { return };
         if let Some(old) = self.board.verify.remove(&pane) {
             old.stop();
         }
@@ -590,7 +634,7 @@ impl App {
 
     /// Activa la verificación automática del proyecto y verifica ya.
     fn board_verify_enable(&mut self, pane: PaneId) {
-        let Some(wt) = self.panes.get(&pane).and_then(|p| p.worktree.clone()) else { return };
+        let Some(wt) = self.worktree_of(pane) else { return };
         match verify::enable(&wt.repo) {
             Ok(()) => {
                 let name = wt.repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -603,23 +647,25 @@ impl App {
 
     pub(super) fn on_verify(&mut self, pane: PaneId, generation: u64, r: verify::Report) {
         let Some(v) = self.board.verify.get_mut(&pane).filter(|v| v.generation == generation) else { return };
-        if !self.focused
-            && let Some(p) = self.panes.get(&pane)
-        {
-            let title = p.agent.as_ref().and_then(|a| a.task.clone()).or_else(|| p.label.clone());
-            let what = title.map(|t| format!(" · {t}")).unwrap_or_default();
-            match &r.outcome {
-                Outcome::Passed(m) => super::notify("forge", &format!("✓ {m} en {}{what}", p.project)),
-                Outcome::Failed(m) => super::notify("forge", &format!("✕ {m} en {}{what}", p.project)),
+        let outcome = r.outcome.clone();
+        v.report = Some(r);
+        if !self.focused {
+            let project = self.project_of_owner(pane);
+            let what = self.title_of(pane).map(|t| format!(" · {t}")).unwrap_or_default();
+            match &outcome {
+                Outcome::Passed(m) => super::notify("forge", &format!("✓ {m} en {project}{what}")),
+                Outcome::Failed(m) => super::notify("forge", &format!("✕ {m} en {project}{what}")),
                 Outcome::Skipped(_) | Outcome::Ask(_) => {}
             }
         }
-        v.report = Some(r);
         self.redraw();
     }
 
     /// Le devuelve al agente el fallo de la verificación para que lo arregle.
     pub(super) fn board_fix(&mut self, pane: PaneId) {
+        if let Some(chat) = owner::as_chat(pane) {
+            return self.board_fix_chat(chat);
+        }
         let name = self.agent_name(pane);
         let Some(prompt) =
             self.board.verify.get(&pane).and_then(|v| v.report.as_ref()).and_then(verify::fix_prompt)
@@ -649,6 +695,16 @@ impl App {
         self.board.notice = Some((format!("Le he pasado el fallo a {name}"), false));
     }
 
+    /// Lo mismo, para un modelo local.
+    fn board_fix_chat(&mut self, chat: u64) {
+        let report = self.board.verify.get(&owner::of_chat(chat)).and_then(|v| v.report.as_ref());
+        let Some(prompt) = report.and_then(verify::fix_prompt_with_output) else { return };
+        self.board.notice = Some(match self.say_to_chat(chat, prompt) {
+            Ok(()) => ("Le he pasado el fallo al modelo".into(), false),
+            Err(e) => (e, true),
+        });
+    }
+
     /// Apunta algo terminado en «Hecho hoy».
     pub(super) fn log_done(&mut self, title: String, project: String, merged: bool) {
         self.board.done.push(DoneItem { title, project, merged, at: Local::now() });
@@ -665,7 +721,10 @@ impl App {
             return;
         }
         let Some(dir) = self.board_project() else { return };
-        let provider = self.selected_provider().unwrap_or(Provider::Claude);
+        let provider = match self.board_worker() {
+            Worker::Local => return self.board_launch_local(task, dir),
+            Worker::Ai(p) => p,
+        };
         let Some(prompts) = dirs::cache_dir().map(|d| d.join("forge").join("prompts")) else { return };
         if std::fs::create_dir_all(&prompts).is_err() {
             return;
@@ -692,6 +751,60 @@ impl App {
         }
     }
 
+    /// Lanza la tarea a tu modelo local, en su propia copia del proyecto.
+    fn board_launch_local(&mut self, task: String, dir: PathBuf) {
+        let Some(model) = self.chats.model().map(|(_, m)| m.name.clone()) else {
+            self.board.notice = Some(("Tu modelo local no responde".into(), true));
+            return self.probe_servers();
+        };
+        let (worktree, note) = match worktree::create(&dir) {
+            Ok(wt) => {
+                let note = (format!("{model} trabaja en ⎇ {}", wt.branch), false);
+                (Some(wt), note)
+            }
+            // Sin copia trabaja sobre tus archivos: pregunta antes de tocarlos.
+            Err(e) => (None, (format!("{model} trabaja sin copia y preguntando: {e}"), true)),
+        };
+        let root = worktree.as_ref().map_or(dir, |w| w.path.clone());
+        self.board.notice = Some(note);
+        let id = self.launch_chat(task, root, worktree);
+        self.board.sel = Some(owner::of_chat(id));
+        self.board.input.clear();
+    }
+
+    /// Quiénes pueden hacer una tarea: tu modelo local y los asistentes
+    /// instalados.
+    pub(super) fn board_workers(&self) -> Vec<Worker> {
+        let mut v = Vec::new();
+        if !self.chats.servers.is_empty() {
+            v.push(Worker::Local);
+        }
+        v.extend(Provider::detect_all().into_iter().map(Worker::Ai));
+        v
+    }
+
+    /// El elegido; si no, tu modelo local.
+    fn board_worker(&self) -> Worker {
+        let all = self.board_workers();
+        let chosen = self.chats.saved.worker.as_deref();
+        all.iter()
+            .copied()
+            .find(|w| Some(w.id()) == chosen)
+            .or(all.first().copied())
+            .unwrap_or(Worker::Ai(self.selected_provider().unwrap_or(Provider::Claude)))
+    }
+
+    /// Pasa al siguiente.
+    fn board_next_worker(&mut self) {
+        let all = self.board_workers();
+        let cur = self.board_worker();
+        let i = all.iter().position(|w| *w == cur).map_or(0, |i| i + 1);
+        if let Some(w) = all.get(i % all.len().max(1)) {
+            self.chats.saved.worker = Some(w.id().to_string());
+            self.chats.saved.save();
+        }
+    }
+
     /// Teclas con la mesa a la vista. Las consume todas.
     pub(super) fn board_key(&mut self, event: &KeyEvent) -> bool {
         let order = self.board_order();
@@ -710,16 +823,16 @@ impl App {
                 if !self.board.input.trim().is_empty() {
                     self.board_launch();
                 } else if let Some(p) = self.board.sel {
-                    self.go_to_pane(p);
+                    self.go_to_owner(p);
                 }
             }
+            Key::Named(NamedKey::Tab) if self.mods.shift_key() => self.board_next_worker(),
             Key::Named(NamedKey::Tab) => {
                 let projects = self.board_projects();
                 if !projects.is_empty() {
                     let cur = self.board_project().and_then(|c| projects.iter().position(|p| *p == c));
                     let n = projects.len();
                     let next = match cur {
-                        Some(i) if self.mods.shift_key() => (i + n - 1) % n,
                         Some(i) => (i + 1) % n,
                         None => 0,
                     };
@@ -792,10 +905,12 @@ impl App {
             Hit::BoardVerifyEnable(p) => self.board_verify_enable(p),
             Hit::BoardFix(p) => self.board_fix(p),
             Hit::BoardCard(p) | Hit::BoardShell(p) => self.go_to_pane(p),
+            Hit::BoardReview(p) if owner::as_chat(p).is_some() => self.open_review(p),
             Hit::BoardReview(p) => {
                 self.go_to_pane(p);
                 self.toggle_review();
             }
+            Hit::BoardWorker => self.board_next_worker(),
             Hit::BoardProject => {
                 let projects = self.board_projects();
                 if !projects.is_empty() {
@@ -929,19 +1044,24 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
         Align::Center,
     );
     ui.hit(proj, Hit::BoardProject);
+    let who = Area::new(proj.x - ui.s(168.0), proj.y, ui.s(160.0), proj.h);
+    ui.round(who, if hover == Some(Hit::BoardWorker) { ui::ACTIVE_BG } else { ui::HOVER_BG }, 1.0, 8.0);
+    ui.text("◆", who.x + ui.s(10.0), who.y + ui.s(6.5), ui.s(14.0), 11.0, EMBER, true, Align::Left);
+    ui.text(
+        if v.worker.len() > 16 { v.worker.clone() } else { format!("{} ⇧⇥", v.worker) },
+        who.x + ui.s(26.0),
+        who.y + ui.s(6.0),
+        who.w - ui.s(34.0),
+        12.0,
+        ui::TEXT,
+        false,
+        Align::Left,
+    );
+    ui.hit(who, Hit::BoardWorker);
     let tx = bar.x + ui.s(40.0);
-    let tw = proj.x - tx - ui.s(10.0);
+    let tw = who.x - tx - ui.s(10.0);
     if v.input.is_empty() {
-        ui.text(
-            "¿Qué hay que hacer?  p. ej. «arregla el test de login que falla»",
-            tx,
-            bar.y + ui.s(13.0),
-            tw,
-            14.0,
-            ui::DIM,
-            false,
-            Align::Left,
-        );
+        ui.text("¿Qué hay que hacer?", tx, bar.y + ui.s(13.0), tw, 14.0, ui::DIM, false, Align::Left);
     } else {
         // Si no cabe, se ve el final (lo que estás escribiendo).
         let max_chars = (tw / ui.s(7.6)).max(10.0) as usize;
@@ -958,7 +1078,7 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
     let (hint, hcolor) = match &v.notice {
         Some((m, err)) => (m.clone(), if *err { HOT } else { ui::GREEN }),
         None => (
-            "Escribe una tarea y pulsa ↵: forge lanza un agente en su propio worktree. ⇥ proyecto · ↑↓ elegir agente · 1-3 responder · ⌘E terminal".into(),
+            "Escribe una tarea y pulsa ↵: forge lanza un agente en su propio worktree. ⇥ proyecto · ⇧⇥ quién la hace · ↑↓ elegir · 1-3 responder".into(),
             FAINT,
         ),
     };
@@ -1045,14 +1165,15 @@ pub fn draw_board(ui: &mut Ui, screen: Area, v: &BoardView, tick: u64, hover: Op
             continue;
         }
         for (k, c) in v.chats[i].iter().enumerate() {
-            let h = ui.s(if c.ask.is_some() { 138.0 } else { 96.0 });
+            let h = ui.s(chat_card_h(c));
             if cy + h > bottom {
                 let more = format!("+{} conversaciones", v.chats[i].len() - k);
                 ui.text(more, cx, cy + ui.s(2.0), cw, 11.0, ui::DIM, false, Align::Left);
                 cy += ui.s(22.0);
                 break;
             }
-            draw_chat_card(ui, Area::new(cx, cy, cw, h), c, i, tick, hover);
+            let sel = v.selected == Some(owner::of_chat(c.id));
+            draw_chat_card(ui, Area::new(cx, cy, cw, h), c, i, sel, tick, hover);
             cy += h + ui.s(12.0);
         }
         let cards = &v.columns[i];
@@ -1266,7 +1387,13 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
         // Lo que hace ahora (o el sello de la verificación), su pantalla en
         // miniatura y su última línea.
         let dcolor = if col == 1 { HOT } else { ui::TEXT };
-        let tw = draw_verify(ui, Area::new(a.x + px, a.y + ui.s(44.0), iw, ui.s(24.0)), c, tick, hover);
+        let tw = draw_verify(
+            ui,
+            Area::new(a.x + px, a.y + ui.s(44.0), iw, ui.s(24.0)),
+            (c.pane, c.verify.as_ref(), c.can_verify),
+            tick,
+            hover,
+        );
         if c.verify.is_none() {
             ui.text(&c.detail, a.x + px, a.y + ui.s(50.0), tw, 11.5, dcolor, false, Align::Left);
         }
@@ -1331,21 +1458,41 @@ fn draw_card(ui: &mut Ui, a: Area, c: &Card, col: usize, selected: bool, tick: u
     ui.hit(a, Hit::BoardCard(c.pane));
 }
 
+/// Alto de la tarjeta según lo que lleva.
+fn chat_card_h(c: &ChatCard) -> f32 {
+    let base = if c.ask.is_some() { 138.0 } else { 96.0 };
+    base + if c.branch.is_some() { 28.0 } else { 0.0 } + if c.has_badge() { 32.0 } else { 0.0 }
+}
+
 /// Tarjeta de una conversación con un modelo local.
-fn draw_chat_card(ui: &mut Ui, a: Area, c: &ChatCard, col: usize, tick: u64, hover: Option<Hit>) {
+#[allow(clippy::too_many_arguments)]
+fn draw_chat_card(
+    ui: &mut Ui,
+    a: Area,
+    c: &ChatCard,
+    col: usize,
+    selected: bool,
+    tick: u64,
+    hover: Option<Hit>,
+) {
     let heat = column_color(col);
     let hovered = hover == Some(Hit::BoardChat(c.id));
     if col == 1 {
         ui.glow(a, HOT, 0.16, 10.0, 14.0);
     }
-    let border = if col == 1 {
+    if selected && col != 1 {
+        ui.glow(a, EMBER, 0.14, 10.0, 12.0);
+    }
+    let border = if selected {
+        EMBER
+    } else if col == 1 {
         HOT
     } else if hovered {
         [0x4a, 0x3f, 0x36]
     } else {
         ui::BORDER
     };
-    let bw = if col == 1 { ui.s(1.5) } else { 1.0 };
+    let bw = if selected || col == 1 { ui.s(1.5) } else { 1.0 };
     ui.panel(a, if hovered { [0x23, 0x1e, 0x1a] } else { CARD_BG }, border, 10.0, bw);
     ui.gradient(Area::new(a.x, a.y, a.w, ui.s(46.0)), (heat, 0.05), (heat, 0.0), 10.0);
     let alpha = if col == 0 { pulse(tick) } else { 0.9 };
@@ -1361,7 +1508,10 @@ fn draw_chat_card(ui: &mut Ui, a: Area, c: &ChatCard, col: usize, tick: u64, hov
     let tx = x + ui.s(18.0);
     ui.text(icon, x, a.y + ui.s(10.0), ui.s(16.0), 12.0, icolor, false, Align::Left);
     ui.text(&c.title, tx, a.y + ui.s(9.0), iw - ui.s(30.0), 13.0, ui::TEXT, true, Align::Left);
-    let place = format!("Chat · {}", c.project);
+    let place = match &c.branch {
+        Some(b) => format!("{} · ⎇ {b}", c.project),
+        None => format!("Chat · {}", c.project),
+    };
     ui.text(place, tx, a.y + ui.s(29.0), iw - ui.s(18.0), 10.5, ui::DIM, false, Align::Left);
     let dcolor = if col == 1 { HOT } else { ui::TEXT };
     ui.text(&c.detail, x, a.y + ui.s(50.0), iw, 11.5, dcolor, col == 1, Align::Left);
@@ -1404,6 +1554,31 @@ fn draw_chat_card(ui: &mut Ui, a: Area, c: &ChatCard, col: usize, tick: u64, hov
         }
         ui.text(foot, x, a.y + ui.s(70.0), iw - ui.s(64.0), 11.0, ui::DIM, false, Align::Left);
     }
+    // Trabajo en su copia: verificación, cambios y revisar.
+    let id = owner::of_chat(c.id);
+    if c.has_badge() {
+        let y = a.bottom() - ui.s(62.0);
+        draw_verify(ui, Area::new(x, y, iw, ui.s(24.0)), (id, c.verify.as_ref(), c.can_verify), tick, hover);
+    }
+    if c.branch.is_some() {
+        let fy = a.bottom() - ui.s(26.0);
+        match c.stats {
+            Some((add, rem, files)) if files > 0 => {
+                let s = format!("+{add}");
+                let w = ui.s(8.0) + s.len() as f32 * ui.s(7.0);
+                ui.text(s, x, fy, w + ui.s(10.0), 11.0, ui::GREEN, true, Align::Left);
+                ui.text(format!("−{rem}"), x + w, fy, ui.s(70.0), 11.0, ui::RED, true, Align::Left);
+                if col != 0 {
+                    let b = Area::new(a.right() - ui.s(100.0), fy - ui.s(5.0), ui.s(88.0), ui.s(24.0));
+                    let h = hover == Some(Hit::BoardReview(id));
+                    ui.round(b, ui::GREEN, if h { 0.28 } else { 0.14 }, 7.0);
+                    ui.text("Revisar", b.x, b.y + ui.s(5.0), b.w, 11.0, ui::GREEN, true, Align::Center);
+                    ui.hit(b, Hit::BoardReview(id));
+                }
+            }
+            _ => ui.text("Sin cambios", x, fy, iw, 11.0, FAINT, false, Align::Left),
+        }
+    }
     if c.unseen {
         let d = Area::new(a.right() - ui.s(16.0), a.y + ui.s(14.0), ui.s(7.0), ui.s(7.0));
         ui.glow(d, HOT, 0.5, 4.0, 5.0);
@@ -1436,13 +1611,19 @@ fn small_button(
 
 /// Sello de la verificación y sus botones, en la línea de detalle. Devuelve
 /// el ancho que queda libre a la izquierda para el texto del detalle.
-fn draw_verify(ui: &mut Ui, a: Area, c: &Card, tick: u64, hover: Option<Hit>) -> f32 {
+fn draw_verify(
+    ui: &mut Ui,
+    a: Area,
+    (pane, badge, can_verify): (PaneId, Option<&Badge>, bool),
+    tick: u64,
+    hover: Option<Hit>,
+) -> f32 {
     let gap = ui.s(6.0);
-    let Some(b) = &c.verify else {
-        if !c.can_verify {
+    let Some(b) = badge else {
+        if !can_verify {
             return a.w;
         }
-        let w = small_button(ui, a.right(), a.y, "Verificar", STEEL, Hit::BoardVerify(c.pane), hover);
+        let w = small_button(ui, a.right(), a.y, "Verificar", STEEL, Hit::BoardVerify(pane), hover);
         return a.w - w - gap;
     };
     let mut right = a.right();
@@ -1462,16 +1643,16 @@ fn draw_verify(ui: &mut Ui, a: Area, c: &Card, tick: u64, hover: Option<Hit>) ->
     if let Some(Outcome::Ask(ask)) = &b.outcome {
         // Nada se ha ejecutado aún: decide el usuario.
         if *ask == Ask::Enable {
-            let hit = Hit::BoardVerifyEnable(c.pane);
+            let hit = Hit::BoardVerifyEnable(pane);
             right -= small_button(ui, right, a.y, "Siempre", STEEL, hit, hover) + gap;
         }
         let label = if *ask == Ask::Enable { "Una vez" } else { "Verificar" };
-        right -= small_button(ui, right, a.y, label, EMBER, Hit::BoardVerify(c.pane), hover) + gap;
+        right -= small_button(ui, right, a.y, label, EMBER, Hit::BoardVerify(pane), hover) + gap;
     } else if b.outcome.is_some() {
-        right -= small_button(ui, right, a.y, "↻", STEEL, Hit::BoardVerify(c.pane), hover) + gap;
+        right -= small_button(ui, right, a.y, "↻", STEEL, Hit::BoardVerify(pane), hover) + gap;
     }
     if matches!(b.outcome, Some(Outcome::Failed(_))) {
-        right -= small_button(ui, right, a.y, "Que lo arregle", EMBER, Hit::BoardFix(c.pane), hover) + gap;
+        right -= small_button(ui, right, a.y, "Que lo arregle", EMBER, Hit::BoardFix(pane), hover) + gap;
     }
     // Sello: una píldora tintada con el icono y el resultado.
     let label = text;

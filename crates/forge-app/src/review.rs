@@ -8,6 +8,7 @@
 //! Git corre siempre en un hilo aparte: la ventana nunca espera.
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use winit::event::KeyEvent;
@@ -15,6 +16,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 
 use super::{App, PaneKind, UserEvent};
+use crate::owner;
 use crate::panes::PaneId;
 use crate::worktree::{self, FileDiff, Worktree};
 
@@ -76,16 +78,25 @@ impl Review {
 }
 
 impl App {
-    /// Abre (o cierra) el panel para el panel con foco.
+    /// Abre (o cierra) el panel para lo que se está viendo.
     pub(super) fn toggle_review(&mut self) {
         if self.review.is_some() {
             self.review = None;
             return;
         }
-        let Some(id) = self.focused_id() else { return };
-        let Some(p) = self.panes.get(&id) else { return };
-        let wt = p.worktree.clone().or_else(|| p.info.cwd.as_deref().and_then(worktree::detect));
-        let dir = wt.as_ref().map(|w| w.path.clone()).or_else(|| p.info.cwd.clone());
+        let owner = match self.chats.current() {
+            Some(c) if self.chat_visible => Some(owner::of_chat(c.id)),
+            _ => self.focused_id(),
+        };
+        if let Some(o) = owner {
+            self.open_review(o);
+        }
+    }
+
+    pub(super) fn open_review(&mut self, id: PaneId) {
+        let cwd = self.dir_of(id);
+        let wt = self.worktree_of(id).or_else(|| cwd.as_deref().and_then(worktree::detect));
+        let dir = wt.as_ref().map(|w| w.path.clone()).or(cwd);
         let base = wt.as_ref().map(|w| w.base.clone()).unwrap_or_else(|| "HEAD".into());
         let project = super::project_of(dir.as_deref());
         self.inbox = None;
@@ -164,10 +175,8 @@ impl App {
             }
             ReviewEvent::Loaded { .. } => {}
             ReviewEvent::Merged { pane, result } => {
-                if let (Ok((_, Some(head))), Some(p)) = (&result, self.panes.get_mut(&pane))
-                    && let Some(w) = &mut p.worktree
-                {
-                    w.base = head.clone();
+                if let Ok((_, Some(head))) = &result {
+                    self.set_base_of(pane, head);
                 }
                 if result.is_ok()
                     && let Some(done) = self.done_entry(pane)
@@ -212,20 +221,12 @@ impl App {
     fn done_entry(&self, pane: PaneId) -> Option<(String, String)> {
         let r = self.review.as_ref().filter(|r| r.pane == pane)?;
         let wt = r.worktree.as_ref()?;
-        let title = self
-            .panes
-            .get(&pane)
-            .and_then(|p| p.agent.as_ref().and_then(|a| a.task.clone()).or_else(|| p.label.clone()))
-            .unwrap_or_else(|| wt.name().to_string());
+        let title = self.title_of(pane).unwrap_or_else(|| wt.name().to_string());
         Some((title, r.project.clone()))
     }
 
-    fn review_merge(&mut self) {
-        let task = self
-            .review
-            .as_ref()
-            .and_then(|r| self.panes.get(&r.pane))
-            .and_then(|p| p.agent.as_ref()?.task.clone());
+    pub(super) fn review_merge(&mut self) {
+        let task = self.review.as_ref().and_then(|r| self.title_of(r.pane));
         let proxy = self.proxy.clone();
         let Some(r) = &mut self.review else { return };
         let Some(wt) = r.worktree.clone() else { return };
@@ -275,6 +276,8 @@ impl App {
             })
             .map(|(id, _)| *id)
             .collect();
+        // Los modelos locales que trabajen ahí se paran antes de borrar.
+        let working = self.leave_worktree(&wt);
         if in_worktree.len() == self.panes.len() {
             self.open_tab(PaneKind::Shell);
         }
@@ -283,6 +286,12 @@ impl App {
         }
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
+            let start = Instant::now();
+            while working.iter().any(|w| w.load(Ordering::Acquire))
+                && start.elapsed() < Duration::from_secs(5)
+            {
+                std::thread::sleep(Duration::from_millis(30));
+            }
             let result = worktree::remove(&wt).map(|_| format!("{} borrado", wt.name()));
             let _ = proxy.send_event(UserEvent::Review(ReviewEvent::Removed { pane, result }));
         });

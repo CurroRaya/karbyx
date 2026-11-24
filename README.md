@@ -17,11 +17,11 @@ por la GPU, y está en español.
 | Vista | Qué es |
 |---|---|
 | **Chat** (⌘L) | El agente de forge con tus modelos locales. Es con lo que se abre. |
-| **Mesa** (⌘E) | Para dirigir a la vez a Claude Code, Codex CLI y Gemini CLI, cada uno en su propia copia del proyecto. |
+| **Mesa** (⌘E) | Para dirigir varias tareas a la vez, con tu modelo local, Claude Code, Codex CLI o Gemini CLI, cada una en su propia copia del proyecto. |
 | **Terminal** | Una terminal GPU completa, con paneles, bloques de comandos y el consumo de tus asistentes. |
 
-Las conversaciones del chat se ven también en la mesa, pero de momento las tareas
-que se lanzan desde ella son para Claude, Codex o Gemini, no para tu modelo local.
+Las conversaciones del chat se ven también en la mesa, y desde ella puedes lanzar
+tareas a tu modelo local, cada una en su propia copia del proyecto.
 
 forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
@@ -259,15 +259,21 @@ herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
 
 ### La mesa (⌘E)
 
-Para trabajar con Claude Code, Codex CLI y Gemini CLI. Cada agente tiene
+Para dirigir varias tareas a la vez, con tu modelo local o con Claude Code, Codex
+CLI y Gemini CLI. Cada agente tiene
 temperatura: los que trabajan laten como brasas, el que te espera está al rojo
 y lo terminado se enfría a acero.
 
 - **«¿Qué hay que hacer?»**: escribe la tarea y pulsa ↵. forge lanza un agente
-  (el asistente seleccionado, Claude por defecto) en un **worktree propio**
-  del proyecto elegido, con la tarea ya escrita. ⇥ cambia de proyecto (los de
-  tus terminales abiertas). Fuera de un repositorio git, el agente trabaja en
-  la carpeta, sin worktree.
+  en un **worktree propio** del proyecto elegido, con la tarea ya escrita. ⇧⇥
+  cambia quién la hace (tu modelo local, si tienes un servidor, o un asistente
+  instalado) y ⇥, el proyecto (los de tus terminales abiertas). Fuera de un
+  repositorio git, el agente trabaja en la carpeta, sin worktree.
+- **Tu modelo local** trabaja en su copia en modo Automático (edita en ella y
+  ejecuta en el sandbox; lo demás se pregunta) y como una conversación más, que
+  puedes abrir y seguir. Al acabar se verifica, se revisa y se fusiona igual que
+  las demás. Sin repositorio git trabaja en la carpeta y pregunta antes. Una
+  conversación reabierta tras cerrar forge vuelve a preguntar.
 - **Columnas**: *Trabajando*, *Te necesita*, *Para revisar* y *Hecho hoy*.
   Cada tarjeta muestra la tarea, el proyecto y la rama, lo que hace ahora,
   una **miniatura en vivo de su terminal** (un minimapa con los colores
@@ -317,7 +323,7 @@ y lo terminado se enfría a acero.
 | ⌘E | La mesa de agentes / volver a las terminales |
 | ↵ / ⇧↵ | Enviar / línea nueva (en el chat) |
 | ⌘↵ / esc | Permitir lo que pide el modelo / no permitirlo y parar |
-| ⇧⇥ | Preguntar antes / Automático (en el chat) |
+| ⇧⇥ | Preguntar antes / Automático (en el chat); quién hace la tarea (en la mesa) |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |
 | ⌘⌥←→↑↓ | Moverse entre paneles |
