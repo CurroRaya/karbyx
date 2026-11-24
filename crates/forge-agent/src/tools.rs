@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::api::Call;
 use crate::exec::{self, End};
+use crate::know;
 use crate::sandbox;
 
 /// Tamaño máximo de un archivo de texto que se lee o edita.
@@ -29,6 +30,8 @@ pub struct Ctx {
     pub project: PathBuf,
     /// Caracteres máximos de un resultado (según el contexto del modelo).
     pub max_chars: usize,
+    /// Carpeta de las habilidades del usuario: leerla es libre.
+    pub skills: Option<PathBuf>,
 }
 
 impl Ctx {
@@ -40,7 +43,7 @@ impl Ctx {
         if home.is_some_and(|h| h.starts_with(&root)) || root.parent().is_none() {
             return None;
         }
-        Some(Self { project: root.clone(), root, max_chars })
+        Some(Self { project: root.clone(), root, max_chars, skills: None })
     }
 }
 
@@ -80,6 +83,8 @@ pub enum Detail {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Job {
+    /// Memoria y habilidades.
+    Know(know::Job),
     Read {
         path: PathBuf,
         offset: usize,
@@ -119,6 +124,26 @@ pub struct Action {
     pub detail: Detail,
     pub need: Need,
     job: Job,
+}
+
+impl Action {
+    pub(crate) fn know(
+        verb: &'static str,
+        target: String,
+        detail: Detail,
+        need: Need,
+        job: know::Job,
+    ) -> Self {
+        Self { verb, target, detail, need, job: Job::Know(job) }
+    }
+
+    /// Lo que hace, si es de memoria o habilidades (no necesita carpeta).
+    pub(crate) fn know_job(&self) -> Option<&know::Job> {
+        match &self.job {
+            Job::Know(j) => Some(j),
+            _ => None,
+        }
+    }
 }
 
 /// Resultado de una acción.
@@ -196,6 +221,10 @@ pub fn verb(name: &str) -> &'static str {
         "edit" => "Editar",
         "write" => "Escribir",
         "bash" => "Ejecutar",
+        "remember" => "Recordar",
+        "forget" => "Olvidar",
+        "skill" => "Habilidad",
+        "save_skill" => "Guardar habilidad",
         _ => "Herramienta",
     }
 }
@@ -299,7 +328,7 @@ fn looks_secret(p: &Path) -> bool {
 fn read_need(ctx: &Ctx, p: &Path) -> Need {
     if looks_secret(p) {
         Need::Always("puede contener claves".into())
-    } else if !p.starts_with(&ctx.root) {
+    } else if !p.starts_with(&ctx.root) && !ctx.skills.as_ref().is_some_and(|s| p.starts_with(s)) {
         Need::Always("está fuera del proyecto".into())
     } else {
         Need::Free
@@ -559,6 +588,7 @@ pub fn execute(
     on: &mut dyn FnMut(&str),
 ) -> Outcome {
     match &action.job {
+        Job::Know(j) => know::run(j),
         Job::Read { path, offset, limit } => match read_text(path) {
             Err(e) => fail(e, "no se pudo leer"),
             Ok(t) => {

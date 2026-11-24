@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::api::{self, ApiError, Call, Chat, Delta, Msg, Server, Stats};
 use crate::compact;
+use crate::know::Know;
 use crate::tools::{self, Action, Ctx, Detail, Need, Outcome};
 
 /// Pasos máximos (llamadas al modelo) por mensaje del usuario.
@@ -38,6 +39,8 @@ pub struct Setup {
     pub root: Option<PathBuf>,
     /// Si la carpeta es una copia hecha para esta tarea, su repositorio.
     pub copy_of: Option<PathBuf>,
+    /// Memoria y habilidades.
+    pub know: Option<Know>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +107,7 @@ pub struct Agent {
     turn: u64,
     auto: Arc<AtomicBool>,
     working: Arc<AtomicBool>,
+    stale: Arc<AtomicBool>,
 }
 
 impl Drop for Agent {
@@ -119,6 +123,7 @@ impl Agent {
         let stopped = Arc::new(AtomicU64::new(0));
         let auto = Arc::new(AtomicBool::new(false));
         let working = Arc::new(AtomicBool::new(false));
+        let stale = Arc::new(AtomicBool::new(false));
         let mut w = Worker {
             rx,
             on: Box::new(on),
@@ -126,6 +131,8 @@ impl Agent {
             stopped: stopped.clone(),
             auto: auto.clone(),
             working: working.clone(),
+            stale: stale.clone(),
+            frozen: None,
             turn: 0,
             next_id: 1,
             last_prompt: 0,
@@ -133,7 +140,7 @@ impl Agent {
             learned: None,
         };
         let _ = std::thread::Builder::new().name("agente".into()).spawn(move || w.run());
-        Self { orders, stopped, turn: 0, auto, working }
+        Self { orders, stopped, turn: 0, auto, working, stale }
     }
 
     pub fn prompt(&mut self, text: String, setup: Setup) {
@@ -168,6 +175,11 @@ impl Agent {
         self.working.clone()
     }
 
+    /// La memoria ha cambiado fuera: se relee en el próximo mensaje.
+    pub fn refresh(&self) {
+        self.stale.store(true, Ordering::Relaxed);
+    }
+
     /// Modo automático: edita en el proyecto y ejecuta en el sandbox sin preguntar.
     pub fn set_auto(&self, on: bool) {
         self.auto.store(on, Ordering::Relaxed);
@@ -193,6 +205,10 @@ struct Worker {
     last_chars: usize,
     /// Contexto real, si el servidor rechazó la conversación por larga.
     learned: Option<usize>,
+    stale: Arc<AtomicBool>,
+    /// Carpeta, mensaje del sistema y herramientas. No cambian a mitad de una
+    /// conversación: obligarían al servidor a releerla entera.
+    frozen: Option<(Option<PathBuf>, String, Vec<serde_json::Value>)>,
 }
 
 impl Worker {
@@ -248,8 +264,23 @@ impl Worker {
         if let (Some(c), Some(repo)) = (&mut ctx, &setup.copy_of) {
             c.project = repo.clone();
         }
-        let defs = if ctx.is_some() { tools::definitions() } else { Vec::new() };
-        let system = Msg::System(system_prompt(ctx.as_ref()));
+        let know = setup.know.as_ref();
+        if let (Some(c), Some(k)) = (&mut ctx, know) {
+            c.skills = k.skills.canonicalize().ok();
+        }
+        if self.stale.swap(false, Ordering::Relaxed)
+            || self.frozen.as_ref().is_none_or(|(root, ..)| *root != setup.root)
+        {
+            let mut defs = if ctx.is_some() { tools::definitions() } else { Vec::new() };
+            let mut system = system_prompt(ctx.as_ref());
+            if let Some(k) = know {
+                defs.extend(k.definitions());
+                system.push_str(&k.prompt(max_chars / 3));
+            }
+            self.frozen = Some((setup.root.clone(), system, defs));
+        }
+        let (system, defs) = self.frozen.as_ref().map(|(_, s, d)| (s.clone(), d.clone())).unwrap_or_default();
+        let system = Msg::System(system);
         match self.history.first_mut() {
             Some(m @ Msg::System(_)) => *m = system,
             _ => self.history.insert(0, system),
@@ -348,7 +379,7 @@ impl Worker {
                     if repeated.1 > 3 {
                         "You have already made this exact call several times. Try something different or explain the problem to the user.".to_string()
                     } else {
-                        let (text, denied) = self.call(call, ctx.as_ref());
+                        let (text, denied) = self.call(call, ctx.as_ref(), know);
                         stop |= denied;
                         text
                     }
@@ -364,11 +395,15 @@ impl Worker {
     }
 
     /// Ejecuta una llamada, con permiso. (resultado para el modelo, se para el turno)
-    fn call(&mut self, call: &Call, ctx: Option<&Ctx>) -> (String, bool) {
+    fn call(&mut self, call: &Call, ctx: Option<&Ctx>, know: Option<&Know>) -> (String, bool) {
         let id = self.next_id;
         self.next_id += 1;
-        let Some(ctx) = ctx else { return ("There are no tools in this conversation.".into(), false) };
-        let action = match tools::prepare(ctx, call) {
+        let prepared = match (know.and_then(|k| k.prepare(call)), ctx) {
+            (Some(p), _) => p,
+            (None, Some(ctx)) => tools::prepare(ctx, call),
+            (None, None) => Err("That tool needs a folder, and this conversation has none.".into()),
+        };
+        let action = match prepared {
             Ok(a) => a,
             Err(e) => {
                 let target = serde_json::from_str::<serde_json::Value>(&call.args)
@@ -420,10 +455,15 @@ impl Worker {
         (self.on)(Event::Running(id));
         let start = Instant::now();
         let (on, stopped, turn) = (&self.on, &self.stopped, self.turn);
-        let Outcome { ok, text, summary } =
-            tools::execute(ctx, &action, &|| stopped.load(Ordering::Relaxed) >= turn, &mut |s| {
-                on(Event::Output(id, s.into()))
-            });
+        let Outcome { ok, text, summary } = match (action.know_job(), ctx) {
+            (Some(j), _) => crate::know::run(j),
+            (None, Some(ctx)) => {
+                tools::execute(ctx, &action, &|| stopped.load(Ordering::Relaxed) >= turn, &mut |s| {
+                    on(Event::Output(id, s.into()))
+                })
+            }
+            (None, None) => return ("There is no folder.".into(), false),
+        };
         (self.on)(Event::Finished { id, ok, summary, output: text.clone(), took: start.elapsed() });
         (text, false)
     }
@@ -510,6 +550,8 @@ impl Worker {
             return Err(ApiError::Failed("el resumen no ahorra espacio".into()));
         }
         self.history = new;
+        // Ya que hay que releerla, con la memoria al día.
+        self.frozen = None;
         self.last_prompt = 0;
         let after = self.used();
         (self.on)(Event::Compacted { summary, before: before as u32, after: after as u32 });
@@ -681,6 +723,7 @@ mod tests {
                 ctx: Some(8192),
                 root: Some(root.into()),
                 copy_of: None,
+                know: None,
             };
             self.agent.prompt("haz algo".into(), setup);
         }

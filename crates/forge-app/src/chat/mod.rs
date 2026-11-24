@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use forge_agent::agent::{Agent, Ask, Decision, Event, Setup};
 use forge_agent::api::{self, Model, Msg, Server, Stats};
 use forge_agent::http::Base;
+use forge_agent::know::{Know, Scope, Skill};
 use forge_agent::tools::{self, Detail};
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
@@ -62,6 +63,14 @@ pub enum ChatHit {
     CopyAnswer(u16),
     /// Resumir la conversación ahora.
     Compact,
+    /// Panel de memoria: abrirlo, olvidar una nota, abrir su archivo, y la
+    /// carpeta de las habilidades.
+    Memory,
+    ForgetNote(bool, u16),
+    MemoryFile(bool),
+    SkillsFolder,
+    /// Habilidad del menú «/».
+    PickSkill(u16),
     /// Revisar los cambios de su copia.
     Review,
     CopyCommand(u8),
@@ -244,6 +253,19 @@ impl Chat {
 
     pub fn auto(&self) -> bool {
         self.agent.as_ref().is_some_and(Agent::auto)
+    }
+
+    /// Memoria y habilidades de esta conversación.
+    fn know(&self) -> Know {
+        let project = self.worktree.as_ref().map(|w| w.repo.clone()).or(self.root.clone());
+        Know {
+            memory: store::memory_dir(),
+            skills: store::skills_dir(),
+            project,
+            root: self.root.clone(),
+            // En una tarea que trabaja sola no hay quien apruebe lo que se guarda.
+            writable: self.worktree.is_none(),
+        }
     }
 
     /// Nombre del proyecto (el del repositorio, si trabaja en una copia).
@@ -549,7 +571,17 @@ pub enum Popup {
     None,
     Models,
     Projects,
+    Memory(Box<MemoryView>),
     Form(Box<Form>),
+}
+
+/// Lo que enseña el panel de memoria.
+pub struct MemoryView {
+    pub user: Vec<String>,
+    pub project: Vec<String>,
+    /// Nombre del proyecto, si hay.
+    pub name: Option<String>,
+    pub skills: Vec<Skill>,
 }
 
 /// Formulario de un servidor.
@@ -580,6 +612,10 @@ pub struct Chats {
     pub side_scroll: f32,
     pub side_max: f32,
     pub side_area: Area,
+    /// Habilidades para el menú «/», la elegida, y si se cerró con esc.
+    pub skills: Vec<Skill>,
+    pub slash_sel: usize,
+    pub slash_off: bool,
     /// Ya se avisó de que no se puede guardar.
     save_failed: bool,
 }
@@ -621,6 +657,9 @@ impl Chats {
             side_scroll: 0.0,
             side_max: 0.0,
             side_area: Area::default(),
+            skills: Vec::new(),
+            slash_sel: 0,
+            slash_off: false,
             save_failed: false,
         }
     }
@@ -629,6 +668,21 @@ impl Chats {
     pub fn recent(&self) -> Vec<usize> {
         let mut v: Vec<usize> = (0..self.list.len()).filter(|i| !self.list[*i].blank()).collect();
         v.sort_by_key(|i| std::cmp::Reverse((self.list[*i].updated, self.list[*i].id)));
+        v
+    }
+
+    /// Habilidades que encajan con lo escrito tras «/», si el menú toca.
+    pub fn slash(&self) -> Vec<&Skill> {
+        let Some(c) = self.current().filter(|_| !self.slash_off && matches!(self.popup, Popup::None)) else {
+            return Vec::new();
+        };
+        let Some(q) = c.input.text().strip_prefix('/').filter(|q| !q.contains(char::is_whitespace)) else {
+            return Vec::new();
+        };
+        let mut v: Vec<&Skill> = self.skills.iter().filter(|s| s.name.contains(q)).collect();
+        // Las que empiezan así, primero.
+        v.sort_by_key(|s| !s.name.starts_with(q));
+        v.truncate(8);
         v
     }
 
@@ -671,6 +725,13 @@ impl Chats {
             || self.toast.is_some()
             || self.servers.iter().any(|s| s.status == Status::Checking)
     }
+}
+
+/// Mensaje que empieza por `/nombre` de una habilidad, con ella dentro.
+fn expand(text: &str, know: &Know) -> Option<String> {
+    let rest = text.strip_prefix('/')?;
+    let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    know.skills().into_iter().find(|s| s.name == name).map(|s| s.invoke(args))
 }
 
 /// Última línea de texto de una respuesta (no de su código).
@@ -963,7 +1024,10 @@ impl App {
         if c.title.is_empty() {
             c.title = crate::agents::one_line(&text, 60);
         }
-        c.items.push(Item::new(Body::User(text.clone())));
+        let know = c.know();
+        // `/habilidad lo que sea`: el modelo recibe la habilidad entera.
+        let said = expand(&text, &know).unwrap_or_else(|| text.clone());
+        c.items.push(Item::new(Body::User(text)));
         c.phase = Phase::Reading(Instant::now());
         c.settled = false;
         c.stick = true;
@@ -971,7 +1035,8 @@ impl App {
         let root = c.root.clone();
         if let Some(a) = &mut c.agent {
             let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
-            a.prompt(text, Setup { server, model, ctx, root: root.clone(), copy_of });
+            let know = Some(know);
+            a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know });
         }
         let (id, copy) = (c.id, c.worktree.is_some());
         if copy {
@@ -991,7 +1056,7 @@ impl App {
         let root = c.root.clone();
         let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
         if let Some(a) = &mut c.agent {
-            a.compact(Setup { server, model, ctx, root, copy_of });
+            a.compact(Setup { server, model, ctx, root, copy_of, know: None });
             c.phase = Phase::Compacting(Instant::now());
             c.stick = true;
         }
@@ -1421,6 +1486,18 @@ impl App {
             }
             ChatHit::Compact => self.compact_chat(),
             ChatHit::Review => self.toggle_review(),
+            ChatHit::Memory => self.open_memory(),
+            ChatHit::ForgetNote(project, i) => self.forget_note(project, i as usize),
+            ChatHit::MemoryFile(project) => {
+                let scope = if project { Scope::Project } else { Scope::User };
+                if let Some(f) = self.chats.current().and_then(|c| c.know().file(scope)) {
+                    self.reveal(f, true);
+                }
+            }
+            ChatHit::SkillsFolder => self.reveal(store::skills_dir(), false),
+            ChatHit::PickSkill(i) => {
+                self.slash_pick(i as usize);
+            }
             ChatHit::CopyCommand(w) => {
                 if let Popup::Form(f) = &mut self.chats.popup {
                     // La clave sugerida se usa también para conectar.
@@ -1468,9 +1545,84 @@ impl App {
                 if let Some(c) = self.chats.current_mut() {
                     c.input.insert(t);
                 }
+                self.slash_changed();
             }
         }
         self.redraw();
+    }
+
+    /// Se ha escrito algo: el menú «/» vuelve a empezar.
+    fn slash_changed(&mut self) {
+        self.chats.slash_sel = 0;
+        self.chats.slash_off = false;
+        // Al escribir «/» se buscan las habilidades que haya ahora.
+        if let Some(c) = self.chats.current()
+            && c.input.text() == "/"
+        {
+            self.chats.skills = c.know().skills();
+        }
+    }
+
+    /// Completa con la habilidad `i` del menú. `false`: no hay menú, o ya
+    /// está escrita entera.
+    fn slash_pick(&mut self, i: usize) -> bool {
+        let Some(name) = self.chats.slash().get(i).map(|s| s.name.clone()) else { return false };
+        let Some(c) = self.chats.current_mut() else { return false };
+        if c.input.text() == format!("/{name}") {
+            return false;
+        }
+        c.input.set(format!("/{name} "));
+        true
+    }
+
+    fn open_memory(&mut self) {
+        let Some(c) = self.chats.current() else { return };
+        let k = c.know();
+        self.chats.popup = Popup::Memory(Box::new(MemoryView {
+            user: k.notes(Scope::User),
+            project: k.notes(Scope::Project),
+            name: k.project.as_deref().map(folder_name),
+            skills: k.skills(),
+        }));
+    }
+
+    fn forget_note(&mut self, project: bool, i: usize) {
+        let scope = if project { Scope::Project } else { Scope::User };
+        let Popup::Memory(v) = &self.chats.popup else { return };
+        let list = if project { &v.project } else { &v.user };
+        let (Some(text), Some(c)) = (list.get(i).cloned(), self.chats.current()) else { return };
+        match c.know().forget(scope, &text) {
+            Ok(()) => self.toast("Olvidado"),
+            Err(e) => self.toast(format!("No se ha podido olvidar: {e}")),
+        }
+        // Las conversaciones abiertas lo tendrán en cuenta.
+        for a in self.chats.list.iter().filter_map(|c| c.agent.as_ref()) {
+            a.refresh();
+        }
+        self.open_memory();
+    }
+
+    /// Abre un archivo o carpeta de forge con su programa, creándolo antes.
+    fn reveal(&mut self, path: PathBuf, text: bool) {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let dir = if text { path.parent().map(Path::to_path_buf) } else { Some(path.clone()) };
+        if let Some(d) = dir {
+            let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d);
+        }
+        if text {
+            let _ = std::fs::OpenOptions::new().append(true).create(true).mode(0o600).open(&path);
+        }
+        let mut c = std::process::Command::new("/usr/bin/open");
+        if text {
+            c.arg("-t");
+        }
+        if c.arg(&path).spawn().is_err() {
+            self.toast("No se ha podido abrir");
+        }
+        self.chats.popup = Popup::None;
+        for a in self.chats.list.iter().filter_map(|c| c.agent.as_ref()) {
+            a.refresh();
+        }
     }
 
     pub(super) fn chat_paste(&mut self) {
@@ -1546,6 +1698,14 @@ impl App {
             (_, _, false) => Move::Right,
         };
         match named {
+            NamedKey::Enter | NamedKey::Tab
+                if !cmd && !shift && !alt && self.slash_pick(self.chats.slash_sel) => {}
+            NamedKey::ArrowUp | NamedKey::ArrowDown if !cmd && !self.chats.slash().is_empty() => {
+                let n = self.chats.slash().len();
+                let d = if *named == NamedKey::ArrowUp { n - 1 } else { 1 };
+                self.chats.slash_sel = (self.chats.slash_sel + d) % n;
+            }
+            NamedKey::Escape if !self.chats.slash().is_empty() => self.chats.slash_off = true,
             NamedKey::Enter if form => self.form_submit(),
             NamedKey::Enter if cmd => match self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
                 Some(id) => self.chat_answer(id, Decision::Allow),
@@ -1581,6 +1741,7 @@ impl App {
                 if let Some(e) = self.chat_editor() {
                     e.delete(m);
                 }
+                self.slash_changed();
             }
             NamedKey::ArrowLeft | NamedKey::ArrowRight => {
                 let m = step(*named == NamedKey::ArrowLeft);
@@ -1804,6 +1965,11 @@ impl App {
                     }
                 }
             }
+            "!memory" => self.open_memory(),
+            t if t.starts_with("!keys ") => t[6..].chars().for_each(|c| self.chat_text(&c.to_string())),
+            "!pick" => {
+                self.slash_pick(0);
+            }
             "!merge" => self.review_merge(),
             "!compact" => self.compact_chat(),
             "!board" => self.show_board(true),
@@ -1857,6 +2023,16 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slash_expands_skills() {
+        let know =
+            Know { memory: "/no".into(), skills: "/no".into(), project: None, root: None, writable: true };
+        let t = expand("/revisar solo el login", &know).unwrap();
+        assert!(t.contains("git diff") && t.contains("solo el login"));
+        assert!(expand("/usr/bin es una ruta", &know).is_none());
+        assert!(expand("revisar", &know).is_none());
+    }
 
     #[test]
     fn last_line_skips_code() {

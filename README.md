@@ -165,7 +165,7 @@ Cierra forge antes y vuelve a abrirla después.
 cargo uninstall forge-app forge-usage
 rm -rf ~/Applications/Forge.app                  # si instalaste la app
 rm -rf ~/.config/forge ~/Library/Caches/forge    # configuración y caché (opcional)
-rm -rf ~/Library/Application\ Support/forge      # conversaciones, servidores y claves (opcional)
+rm -rf ~/Library/Application\ Support/forge      # conversaciones, memoria, servidores y claves (opcional)
 ```
 
 forge no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
@@ -234,11 +234,47 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | `read`, `list`, `search`, `find` | Leer, listar, buscar en el contenido y por nombre | Libre dentro de la carpeta |
 | `edit`, `write` | Cambiar una parte de un archivo, o crearlo | Se pregunta, con el diff |
 | `bash` | Ejecutar un comando en la carpeta, dentro del sandbox | Se pregunta |
+| `skill` | Leer una habilidad | Libre |
+| `remember`, `forget`, `save_skill` | Cambiar la memoria y las habilidades | Se pregunta siempre |
 
 **Se pregunta siempre**, también en Automático: ejecutar fuera del sandbox,
 salir de la carpeta, leer archivos que suelen tener claves (`.env`, `*.pem`...)
-y escribir en `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
+y escribir en `.forge`, `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
 herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
+
+#### Memoria y habilidades
+
+Abajo a la izquierda, **Memoria y habilidades** enseña lo que tu modelo tiene en
+cuenta en cada conversación.
+
+- **Memoria**: notas cortas, sobre ti o sobre cada proyecto. Díselo («recuerda
+  que prefiero respuestas cortas», «recuerda que aquí los tests se lanzan con
+  `make test`») y verás la nota exacta antes de guardarla. Se olvidan con la ×,
+  pidiéndoselo, o editando el archivo. Lo que parece una clave no se guarda.
+- **Habilidades**: procedimientos que se repiten. Escribe **/** para elegir una
+  (`/revisar solo el login`), o el modelo la usa cuando viene al caso. Trae tres
+  de serie (`/revisar`, `/tests`, `/documentar`); pide «guarda esto como
+  habilidad» para crear otra. Son carpetas con un `SKILL.md`, el formato de
+  Claude Code:
+
+  ```markdown
+  ---
+  description: Cuándo usarla, en una frase
+  ---
+
+  Los pasos, en Markdown.
+  ```
+
+  Las tuyas van en `~/.config/forge/skills/<nombre>/`; las de un proyecto, en
+  `.forge/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de
+  un proyecto ajeno son instrucciones de otro: léelas antes, sobre todo si vas a
+  usar Automático.
+
+El modelo **nunca guarda nada sin tu permiso**, tampoco en Automático, y las
+tareas lanzadas desde la mesa no pueden ni pedirlo. La memoria está sin cifrar en
+`~/Library/Application Support/forge/chat.memoria`, solo para ti. Un cambio de
+memoria se nota en las conversaciones nuevas o reabiertas (borrar una nota, en el
+siguiente mensaje).
 
 #### Qué protege y qué no
 

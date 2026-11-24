@@ -5,10 +5,14 @@
 //! caja de escritura.
 
 use chrono::{DateTime, Local, NaiveDate};
+use forge_agent::know::Source;
 use forge_agent::tools::{Detail, DiffLine, LineKind};
 
 use super::md::{self, Block, mono, span};
-use super::{Body, Chat, ChatHit, Chats, Form, Item, Phase, Popup, Status, ToolItem, ToolState, folder_name};
+use super::{
+    Body, Chat, ChatHit, Chats, Form, Item, MemoryView, Phase, Popup, Status, ToolItem, ToolState,
+    folder_name,
+};
 use crate::gfx::{Gfx, Rich, RichDraw, RichSpan, TextPos};
 use crate::ui::{self, Align, Area, DIM, EMBER, Font, HOT, Hit, Rgb, TEXT, Ui};
 
@@ -795,7 +799,7 @@ fn day_group(updated: i64, today: NaiveDate) -> &'static str {
 pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: Option<Hit>) {
     ui.fill(area, SIDE_BG);
     // La lista va primero: lo que sobresale por arriba y por abajo se tapa.
-    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(70.0));
+    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(108.0));
     let view = Area::new(area.x, list_top, area.w - 1.0, (foot - list_top).max(0.0));
     let row = ui.s(48.0);
     let mut y = list_top - chats.side_scroll;
@@ -894,6 +898,18 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
     ui.text("⌘N", new.x, new.y + ui.s(9.0), new.w - ui.s(12.0), 11.0, FAINT, false, Align::Right);
     ui.hit(new, Hit::Chat(ChatHit::New));
 
+    // Memoria y habilidades.
+    let m = Area::new(area.x + ui.s(8.0), area.bottom() - ui.s(102.0), area.w - ui.s(16.0), ui.s(32.0));
+    ui.fill(Area::new(area.x, m.y - ui.s(6.0), area.w - 1.0, 1.0), LINE);
+    let hov = env.hover == Some(ChatHit::Memory);
+    if hov {
+        ui.round(m, ui::HOVER_BG, 1.0, 9.0);
+    }
+    ui.text("✦", m.x + ui.s(11.0), m.y + ui.s(8.0), ui.s(16.0), 11.5, EMBER, true, Align::Left);
+    let color = if hov { TEXT } else { DIM };
+    ui.text("Memoria y habilidades", m.x + ui.s(30.0), m.y + ui.s(7.5), m.w, 12.0, color, false, Align::Left);
+    ui.hit(m, Hit::Chat(ChatHit::Memory));
+
     // Servidor.
     let a = Area::new(area.x + ui.s(8.0), area.bottom() - ui.s(62.0), area.w - ui.s(16.0), ui.s(52.0));
     ui.fill(Area::new(area.x, a.y - ui.s(8.0), area.w - 1.0, 1.0), LINE);
@@ -981,10 +997,12 @@ pub fn draw_chat(
         over.panel(a, ui::ACTIVE_BG, EMBER, 16.0, 1.0);
         over.text(t, a.x, a.y + over.s(7.0), a.w, 12.5, TEXT, true, Align::Center);
     }
+    slash_menu(over, area, x, top, chats, env);
     match &chats.popup {
         Popup::None => {}
         Popup::Models => models_menu(over, area, x, top, chats, env),
         Popup::Projects => projects_menu(over, area, x, top, chats, env),
+        Popup::Memory(v) => memory_panel(over, area, v, env),
         Popup::Form(f) => form(over, area, chats, f, env),
     }
 }
@@ -1503,6 +1521,145 @@ fn popup_box(ui: &mut Ui, x: f32, bottom: f32, w: f32, h: f32) -> Area {
     ui.glow(a, [0, 0, 0], 0.6, 13.0, 26.0);
     ui.panel(a, [0x20, 0x1b, 0x18], ui::BORDER, 13.0, 1.0);
     a
+}
+
+/// Menú de habilidades al escribir «/».
+fn slash_menu(ui: &mut Ui, screen: Area, x: f32, bottom: f32, chats: &Chats, env: &Env) {
+    let list = chats.slash();
+    if list.is_empty() {
+        return;
+    }
+    let rh = ui.s(34.0);
+    let w = ui.s(620.0).min(screen.w - ui.s(40.0));
+    let a = popup_box(ui, x, bottom, w, rh * list.len() as f32 + ui.s(12.0));
+    for (i, s) in list.iter().enumerate() {
+        let b = Area::new(a.x + ui.s(6.0), a.y + ui.s(6.0) + rh * i as f32, a.w - ui.s(12.0), rh);
+        let hit = ChatHit::PickSkill(i as u16);
+        if i == chats.slash_sel || env.hover == Some(hit) {
+            ui.round(b, ui::ACTIVE_BG, 1.0, 8.0);
+        }
+        let name = format!("/{}", s.name);
+        ui.text(name, b.x + ui.s(12.0), b.y + ui.s(8.0), ui.s(170.0), 13.0, EMBER, true, Align::Left);
+        let dx = b.x + ui.s(186.0);
+        ui.text(
+            &s.description,
+            dx,
+            b.y + ui.s(8.5),
+            b.right() - dx - ui.s(12.0),
+            12.0,
+            DIM,
+            false,
+            Align::Left,
+        );
+        ui.hit(b, Hit::Chat(hit));
+    }
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
+}
+
+/// Panel de memoria y habilidades.
+fn memory_panel(ui: &mut Ui, screen: Area, v: &MemoryView, env: &Env) {
+    ui.tint(screen, [0, 0, 0], 0.55);
+    let w = ui.s(680.0).min(screen.w - ui.s(40.0));
+    // Crece con lo que hay que enseñar.
+    let notes = (v.user.len().max(1) + v.project.len().max(1)).min(16) + v.skills.len().min(12);
+    let h = ui.s(250.0 + 27.0 * notes as f32).min(screen.h - ui.s(40.0));
+    let a = Area::new(screen.x + (screen.w - w) / 2.0, screen.y + (screen.h - h) / 2.0, w, h);
+    ui.glow(a, [0, 0, 0], 0.7, 16.0, 40.0);
+    ui.panel(a, [0x1d, 0x19, 0x16], ui::BORDER, 16.0, 1.0);
+    let pad = ui.s(26.0);
+    let (x, w) = (a.x + pad, a.w - 2.0 * pad);
+    let mut y = a.y + ui.s(22.0);
+    ui.text("Memoria y habilidades", x, y, w, 19.0, TEXT, true, Align::Left);
+    y += ui.s(32.0);
+    let about = "Lo que tu modelo tiene en cuenta en cada conversación. Nada se guarda sin que lo apruebes.";
+    ui.text(about, x, y, w, 12.5, DIM, false, Align::Left);
+    y += ui.s(34.0);
+    // Se reparte el alto: las notas mandan, pero siempre se ven habilidades.
+    let bottom = a.bottom() - ui.s(58.0);
+    let row = ui.s(27.0);
+    let link = |ui: &mut Ui, text: &str, y: f32, hit: ChatHit| {
+        let b = Area::new(x + w - ui.s(150.0), y - ui.s(3.0), ui.s(150.0), ui.s(22.0));
+        let c = if env.hover == Some(hit) { EMBER } else { FAINT };
+        ui.text(text, b.x, b.y + ui.s(4.0), b.w, 11.0, c, false, Align::Right);
+        ui.hit(b, Hit::Chat(hit));
+    };
+    let project = v.name.clone().unwrap_or_default();
+    let blocks = [(false, "SOBRE TI".to_string(), &v.user), (true, project.to_uppercase(), &v.project)];
+    for (is_project, title, notes) in blocks {
+        if is_project && v.name.is_none() {
+            continue;
+        }
+        ui.text(title, x, y, w * 0.6, 10.5, EMBER, true, Align::Left);
+        link(ui, "Editar el archivo", y, ChatHit::MemoryFile(is_project));
+        y += ui.s(24.0);
+        if notes.is_empty() {
+            let t = if is_project {
+                "Nada todavía. Dile, por ejemplo: «recuerda que aquí los tests se lanzan con make test»."
+            } else {
+                "Nada todavía. Dile, por ejemplo: «recuerda que prefiero respuestas cortas»."
+            };
+            ui.text(t, x, y, w, 12.0, FAINT, false, Align::Left);
+            y += row;
+        }
+        let fit = (((bottom - y) * 0.42 / row) as usize).max(2);
+        // Las últimas son las que más cuentan.
+        let skip = notes.len().saturating_sub(fit);
+        for (i, n) in notes.iter().enumerate().skip(skip) {
+            ui.text("•", x, y, ui.s(12.0), 12.5, EMBER, false, Align::Left);
+            ui.text(n, x + ui.s(14.0), y, w - ui.s(44.0), 12.5, TEXT, false, Align::Left);
+            let hit = ChatHit::ForgetNote(is_project, i as u16);
+            let b = Area::new(x + w - ui.s(24.0), y - ui.s(3.0), ui.s(24.0), ui.s(24.0));
+            let hov = env.hover == Some(hit);
+            if hov {
+                ui.round(b, LINE, 1.0, 7.0);
+            }
+            ui.text(
+                "×",
+                b.x,
+                b.y + ui.s(1.0),
+                b.w,
+                15.0,
+                if hov { ui::RED } else { FAINT },
+                false,
+                Align::Center,
+            );
+            ui.hit(b, Hit::Chat(hit));
+            y += row;
+        }
+        if skip > 0 {
+            let t = format!("y {skip} más antiguas, en el archivo");
+            ui.text(t, x, y, w, 11.0, FAINT, false, Align::Left);
+            y += row;
+        }
+        y += ui.s(16.0);
+    }
+    ui.text("HABILIDADES", x, y, w * 0.6, 10.5, EMBER, true, Align::Left);
+    link(ui, "Abrir la carpeta", y, ChatHit::SkillsFolder);
+    y += ui.s(24.0);
+    let fit = ((bottom - y) / row).max(0.0) as usize;
+    for (i, s) in v.skills.iter().enumerate() {
+        if i + 1 == fit && v.skills.len() > fit {
+            ui.text(format!("y {} más", v.skills.len() - i), x, y, w, 11.0, FAINT, false, Align::Left);
+            break;
+        }
+        ui.text(format!("/{}", s.name), x, y, ui.s(150.0), 12.5, TEXT, true, Align::Left);
+        let from = match s.source {
+            Source::User => "tuya",
+            Source::Project => "del proyecto",
+            Source::Builtin => "de serie",
+        };
+        ui.text(&s.description, x + ui.s(156.0), y, w - ui.s(250.0), 12.0, DIM, false, Align::Left);
+        ui.text(from, x, y, w, 11.0, FAINT, false, Align::Right);
+        y += row;
+    }
+    let hint = "Escribe / en el chat para usar una, o pide «guarda esto como habilidad».";
+    ui.text(hint, x, a.bottom() - ui.s(42.0), w - ui.s(120.0), 12.0, FAINT, false, Align::Left);
+    let b = Area::new(x + w - ui.s(100.0), a.bottom() - ui.s(50.0), ui.s(100.0), ui.s(34.0));
+    let hov = env.hover == Some(ChatHit::FormCancel);
+    ui.panel(b, if hov { ui::ACTIVE_BG } else { ui::HOVER_BG }, ui::BORDER, 10.0, 1.0);
+    ui.text("Cerrar", b.x, b.y + ui.s(7.5), b.w, 12.5, TEXT, true, Align::Center);
+    ui.hit(b, Hit::Chat(ChatHit::FormCancel));
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
 }
 
 struct Row<'a> {

@@ -31,6 +31,7 @@ fn main() {
         ctx: models[0].ctx,
         root: Some(root.into()),
         copy_of: None,
+        know: None,
     };
     agent.prompt(task.clone(), setup);
     for e in rx {

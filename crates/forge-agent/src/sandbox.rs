@@ -45,8 +45,9 @@ pub const SECRETS: [&str; 25] = [
 
 /// Archivos del worktree que no se pueden escribir, a cualquier nivel: los
 /// leen o ejecutan luego git, los asistentes o el editor, fuera del sandbox.
-pub const PROTECTED: [&str; 11] = [
+pub const PROTECTED: [&str; 12] = [
     ".git",
+    ".forge",
     ".claude",
     ".codex",
     ".gemini",

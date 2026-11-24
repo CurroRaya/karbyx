@@ -101,6 +101,19 @@ pub enum StoredItem {
     Error(String),
 }
 
+/// Carpeta de la memoria.
+pub fn memory_dir() -> PathBuf {
+    path().map(|p| p.with_extension("memoria")).unwrap_or_default()
+}
+
+/// Carpeta de las habilidades del usuario.
+pub fn skills_dir() -> PathBuf {
+    match std::env::var_os("FORGE_SKILLS") {
+        Some(p) => p.into(),
+        None => dirs::home_dir().unwrap_or_default().join(".config").join("forge").join("skills"),
+    }
+}
+
 /// Carpeta de las conversaciones.
 fn chats_dir() -> Option<PathBuf> {
     Some(path()?.with_extension("d"))
