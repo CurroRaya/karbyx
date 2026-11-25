@@ -1,23 +1,23 @@
-# forge
+# Karbyx
 
 [![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
 
 **Tu agente de programación para macOS, con los modelos que tienes en casa.**
 
-Sirves un modelo en tu PC con llama.cpp o Strata y forge, en el Mac, se conecta
+Sirves un modelo en tu PC con llama.cpp o Strata y Karbyx, en el Mac, se conecta
 a él por tu red: lee tu proyecto, lo edita y ejecuta comandos, pidiéndote
-permiso (o sin pedirlo, si tú quieres). El modelo solo piensa: las herramientas se ejecutan en el Mac y lo que
-lee viaja a tu PC, no a la nube, salvo que tú añadas
-[algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust y
-dibujada por la GPU, y está en español.
+permiso (o sin pedirlo, si tú quieres). El modelo solo piensa: las herramientas
+se ejecutan en el Mac y lo que lee viaja a tu PC, no a la nube, salvo que tú
+añadas [algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust
+y dibujada por la GPU, y está en español.
 
-![El chat de forge: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
+![El chat de Karbyx: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
 
 *Captura hecha con un servidor de prueba: ni el modelo ni la velocidad son reales.*
 
 | Vista | Qué es |
 |---|---|
-| **Chat** (⌘L) | El agente de forge con tus modelos locales. Es con lo que se abre. |
+| **Chat** (⌘L) | El agente de Karbyx con tus modelos locales. Es con lo que se abre. |
 | **Mesa** (⌘E) | Para dirigir varias tareas a la vez, con tu modelo local, Claude Code, Codex CLI o Gemini CLI, cada una en su propia copia del proyecto. |
 | **Terminal** | Una terminal GPU completa, con paneles, bloques de comandos y el consumo de tus asistentes. |
 
@@ -33,22 +33,22 @@ Además:
 - **[Servidores MCP](#servidores-mcp)**: herramientas de otros programas y
   servicios, en tu Mac o remotos, con buscador en el registro oficial.
 
-forge es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
+Karbyx es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
 misma licencia, para que todas las mejoras sigan siendo de todos.
 
 ## Empezar en cinco minutos
 
-**1. Instala forge en el Mac** (necesitas [Rust y las herramientas de
+**1. Instala Karbyx en el Mac** (necesitas [Rust y las herramientas de
 Xcode](#requisitos)):
 
 ```bash
-git clone https://github.com/CurroRaya/forge_term.git
-cd forge_term
-scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
+git clone https://github.com/CurroRaya/karbyx.git
+cd karbyx
+scripts/bundle.sh --install    # crea Karbyx.app y la copia a ~/Applications
 ```
 
-**2. Abre forge** (⌘Espacio, «forge»), pulsa **Conectar con mi PC** y copia la
+**2. Abre Karbyx** (⌘Espacio, «Karbyx»), pulsa **Conectar con mi PC** y copia la
 orden de tu servidor. Lleva una clave ya generada, que se rellena sola en el
 formulario.
 
@@ -65,7 +65,7 @@ strata launch --access lan --port 8080 --api-key CLAVE
 
 Si Windows pregunta por el cortafuegos, permite solo las redes privadas.
 
-**4. Escribe la dirección del PC** en forge (`192.168.1.50:8080`) y pulsa ↵. En
+**4. Escribe la dirección del PC** en Karbyx (`192.168.1.50:8080`) y pulsa ↵. En
 Windows la da `ipconfig`: la «Dirección IPv4» del adaptador que tiene puerta de
 enlace. La primera vez, macOS pide permiso para la red local.
 
@@ -74,7 +74,7 @@ enlace. La primera vez, macOS pide permiso para la red local.
 ## Requisitos
 
 - **macOS** (probado en macOS 27). Linux y Windows aún no están soportados: el
-  PC del modelo puede ser cualquiera, pero forge se ejecuta en un Mac.
+  PC del modelo puede ser cualquiera, pero Karbyx se ejecuta en un Mac.
 - **Un servidor de modelos** con la API de OpenAI. Probado con llama.cpp y
   Gemma 4 26B; Strata y otros deberían funcionar, pero no los hemos probado. El
   modelo debe admitir **herramientas** para trabajar en una carpeta, y se
@@ -115,12 +115,12 @@ enlace. La primera vez, macOS pide permiso para la red local.
 ### Como app de macOS (recomendado)
 
 ```bash
-scripts/bundle.sh --install    # crea Forge.app y la copia a ~/Applications
+scripts/bundle.sh --install    # crea Karbyx.app y la copia a ~/Applications
 ```
 
-Crea `target/release/Forge.app`, con su icono y firmada para este Mac, y con
+Crea `target/release/Karbyx.app`, con su icono y firmada para este Mac, y con
 `--install` la copia a `~/Applications`. Desde ahí la abres con Spotlight
-(⌘Espacio, «forge») o la anclas al Dock. Sin `--install` solo la crea.
+(⌘Espacio, «Karbyx») o la anclas al Dock. Sin `--install` solo la crea.
 
 Abierta desde el Dock, sus terminales empiezan en tu carpeta personal y toman
 el idioma de macOS (`LANG`), como Terminal.
@@ -128,8 +128,8 @@ el idioma de macOS (`LANG`), como Terminal.
 ### Desde la terminal
 
 ```bash
-cargo install --path crates/forge-app      # la app          → ~/.cargo/bin/forge-app
-cargo install --path crates/forge-usage    # CLI de consumo  → ~/.cargo/bin/forge-usage
+cargo install --path crates/karbyx-app      # la app          → ~/.cargo/bin/karbyx-app
+cargo install --path crates/karbyx-usage    # CLI de consumo  → ~/.cargo/bin/karbyx-usage
 ```
 
 La primera compilación tarda unos minutos; las siguientes, segundos.
@@ -139,83 +139,83 @@ La primera compilación tarda unos minutos; las siguientes, segundos.
 Una vez instalado, desde cualquier terminal:
 
 ```bash
-forge-app                 # abre forge
-forge-usage               # resumen de consumo de tus asistentes
-forge-usage watch         # consumo en directo
-forge-usage -p claude daily
+karbyx-app                 # abre Karbyx
+karbyx-usage               # resumen de consumo de tus asistentes
+karbyx-usage watch         # consumo en directo
+karbyx-usage -p claude daily
 ```
 
 Sin instalar, desde la carpeta del proyecto:
 
 ```bash
-cargo run --release -p forge-app
-cargo run --release -p forge-usage -- watch
+cargo run --release -p karbyx-app
+cargo run --release -p karbyx-usage -- watch
 ```
 
 Si lo lanzas desde una terminal y quieres poder cerrarla sin que se cierre
-forge, lánzalo desvinculado (o usa la [app](#como-app-de-macos-recomendado)):
+Karbyx, lánzalo desvinculado (o usa la [app](#como-app-de-macos-recomendado)):
 
 ```bash
-forge-app &!
+karbyx-app &!
 ```
 
 ## Actualizar
 
 ```bash
-cd forge_term
+cd karbyx
 git pull
 scripts/bundle.sh --install                # si usas la app
-cargo install --path crates/forge-app      # si la instalaste con cargo
-cargo install --path crates/forge-usage
+cargo install --path crates/karbyx-app      # si la instalaste con cargo
+cargo install --path crates/karbyx-usage
 ```
 
-Cierra forge antes y vuelve a abrirla después.
+Cierra Karbyx antes y vuelve a abrirla después.
 
 ## Desinstalar
 
 ```bash
-cargo uninstall forge-app forge-usage
-rm -rf ~/Applications/Forge.app                  # si instalaste la app
-rm -rf ~/Library/Caches/forge                    # caché (opcional)
-rm -rf ~/.config/forge                           # configuración, tus habilidades y servidores MCP (opcional)
-rm -rf ~/Library/Application\ Support/forge      # conversaciones, memoria, sesiones y claves (opcional)
+cargo uninstall karbyx-app karbyx-usage
+rm -rf ~/Applications/Karbyx.app                  # si instalaste la app
+rm -rf ~/Library/Caches/karbyx                    # caché (opcional)
+rm -rf ~/.config/karbyx                           # configuración, tus habilidades y servidores MCP (opcional)
+rm -rf ~/Library/Application\ Support/karbyx      # conversaciones, memoria, sesiones y claves (opcional)
 ```
 
-forge no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
+Karbyx no modifica tu `.zshrc` ni tus ajustes (solo edita lo que le permites en
 la carpeta que elijas). La integración con zsh
-vive en `~/Library/Caches/forge` y desaparece con ella.
+vive en `~/Library/Caches/karbyx` y desaparece con ella.
 
 ## Solución de problemas
 
 | Problema | Solución |
 |---|---|
-| «No llego a…» al conectar | El PC está en otra red, o forge no tiene permiso en *Ajustes del Sistema › Privacidad y seguridad › Red local*. |
+| «No llego a…» al conectar | El PC está en otra red, o Karbyx no tiene permiso en *Ajustes del Sistema › Privacidad y seguridad › Red local*. |
 | «… no responde» al conectar | El PC está apagado o el cortafuegos de Windows corta el puerto. Comprueba también la IP: el router puede cambiarla. |
 | «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
-| «El servidor pide una clave» | La clave de forge no es la de `--api-key`. Menú de modelos › *Editar*. |
+| «El servidor pide una clave» | La clave de Karbyx no es la de `--api-key`. Menú de modelos › *Editar*. |
 | El modelo contesta, pero no usa las herramientas | Elige una carpeta; si ya la tienes, ese modelo o su plantilla no las admiten. |
 | Olvida detalles en tareas largas | El contexto se llena y se resume: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
 | Un servidor MCP no arranca | Falta el programa que lo lanza (`npx`, `uvx`, `docker`...). El panel *Servidores MCP* enseña su error. |
 | Un MCP remoto no deja iniciar sesión | No admite otros programas: crea una clave en su web y pégala en *Clave*. El transporte antiguo (SSE) no está soportado. |
 | Con MCP, el contexto se llena enseguida | Sus herramientas ocupan sitio: apaga las que no uses o actívalo solo en el proyecto que lo necesita. |
 | No encuentra una habilidad o un servidor | Los catálogos no los tienen todos: pega la dirección de GitHub, la carpeta o su JSON. |
-| «Un archivo de forge estaba dañado» al abrir | Se ha apartado con `.roto` al final, en `~/Library/Application Support/forge`, y forge sigue con uno nuevo. Si era `chat.json`, vuelve a conectar tu PC; si era `chat.sesiones`, inicia sesión otra vez en tus MCP. |
+| «Un archivo de Karbyx estaba dañado» al abrir | Se ha apartado con `.roto` al final, en `~/Library/Application Support/karbyx`, y Karbyx sigue con uno nuevo. Si era `chat.json`, vuelve a conectar tu PC; si era `chat.sesiones`, inicia sesión otra vez en tus MCP. |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
-| `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
+| `command not found: karbyx-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
 | No aparecen los bloques de comandos | Solo funcionan con zsh y la integración activa (`shell_integration = true`). Abre una pestaña nueva tras cambiarlo. |
 | El panel de consumo no sale | Aparece solo en pestañas con una sesión de IA; fuérzalo con ⌘⌥B. |
-| Va lento o quieres medirlo | `FORGE_PROFILE=1 forge-app` muestra el tiempo de cada frame. |
+| Va lento o quieres medirlo | `KARBYX_PROFILE=1 karbyx-app` muestra el tiempo de cada frame. |
 
 ## Estructura del proyecto
 
 | Crate | Qué hace |
 |---|---|
-| `forge-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, resumen del contexto, memoria y habilidades, cliente MCP (en el Mac y remoto, con OAuth), los buscadores del registro MCP y de skills.sh, y el sandbox de macOS con la ejecución de comandos |
-| `forge-app` | La app: render por GPU (wgpu + glyphon), chat con sus conversaciones guardadas, paneles de memoria, habilidades y MCP, mesa, terminales con pestañas y paneles, panel de consumo, `forge.toml` con temas y atajos |
-| `forge-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
-| `forge-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
-| `forge-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
+| `karbyx-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, resumen del contexto, memoria y habilidades, cliente MCP (en el Mac y remoto, con OAuth), los buscadores del registro MCP y de skills.sh, y el sandbox de macOS con la ejecución de comandos |
+| `karbyx-app` | La app: render por GPU (wgpu + glyphon), chat con sus conversaciones guardadas, paneles de memoria, habilidades y MCP, mesa, terminales con pestañas y paneles, panel de consumo, `karbyx.toml` con temas y atajos |
+| `karbyx-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
+| `karbyx-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
+| `karbyx-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
 
 ## Uso
 
@@ -226,8 +226,8 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
   Una conversación empezada se queda en su carpeta. Si el proyecto tiene
   `AGENTS.md` (o `CLAUDE.md`), el modelo lo lee al empezar.
 - **Modelo**: el menú junta los de todos tus servidores. Si el tuyo se apaga,
-  forge lo reintenta solo. Desde ahí se abre también **Claude Code**, en una
-  terminal de forge y en la misma carpeta, con tu suscripción y sus permisos.
+  Karbyx lo reintenta solo. Desde ahí se abre también **Claude Code**, en una
+  terminal de Karbyx y en la misma carpeta, con tu suscripción y sus permisos.
 - **Permisos**: leer dentro de la carpeta es libre; editar y ejecutar se
   preguntan enseñando el diff o el comando. **⌘↵** permite, **esc** para, y si
   escribes otra cosa el modelo la recibe como respuesta.
@@ -237,15 +237,15 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 - **Total**: **no pregunta nada**. Ejecuta fuera del sandbox, sale de la carpeta,
   lee archivos con claves, usa tus servidores MCP y guarda en la memoria. Se elige
   en el menú de permisos, confirmándolo, y vale solo para esa conversación hasta
-  que cierres forge. Un modelo puede equivocarse, o una página o un archivo pueden
+  que cierres Karbyx. Un modelo puede equivocarse, o una página o un archivo pueden
   engañarlo: puede borrar cosas tuyas o enviarlas fuera. Lo que hace queda a la
   vista en el chat, pero ya hecho. Arrancar un servidor MCP nuevo se sigue
   aprobando aparte.
 - **Mientras trabaja** puedes escribir el siguiente mensaje, que se envía al
-  acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y forge
+  acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y Karbyx
   avisa si una termina o pide permiso y no la estás viendo.
 - **Conversaciones**: se guardan solas a cada paso y siguen ahí al reabrir
-  forge, ordenadas por fecha. Si lo cierras con una a medias, se para y puedes
+  Karbyx, ordenadas por fecha. Si lo cierras con una a medias, se para y puedes
   continuarla. Al reabrir, todas vuelven a preguntar antes de cambiar nada. La ×
   (dos clics) la borra.
 - **Copiar**: arrastra por la conversación; si sales por arriba o por abajo se
@@ -273,7 +273,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 
 **Se pregunta siempre**, también en Automático (pero no en Total): ejecutar fuera del sandbox,
 salir de la carpeta, leer archivos que suelen tener claves (`.env`, `*.pem`...)
-y escribir en `.forge`, `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
+y escribir en `.karbyx`, `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
 herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
 
 #### Memoria y habilidades
@@ -306,14 +306,14 @@ cuenta en cada conversación.
   instalar, y los programas pierden el permiso de ejecución. Nadie comprueba que
   sean de fiar, por muchas instalaciones que tengan.
 
-  Las tuyas van en `~/.config/forge/skills/<nombre>/`; las de un proyecto, en
-  `.forge/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de
+  Las tuyas van en `~/.config/karbyx/skills/<nombre>/`; las de un proyecto, en
+  `.karbyx/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de
   un proyecto ajeno son instrucciones de otro: léelas antes, sobre todo si vas a
   usar Automático o Total.
 
 El modelo **no guarda nada sin tu permiso**, tampoco en Automático (en Total, sí), y las
 tareas lanzadas desde la mesa no pueden ni pedirlo. La memoria está sin cifrar en
-`~/Library/Application Support/forge/chat.memoria`, solo para ti. Un cambio de
+`~/Library/Application Support/karbyx/chat.memoria`, solo para ti. Un cambio de
 memoria se nota en las conversaciones nuevas o reabiertas (borrar una nota, en el
 siguiente mensaje).
 
@@ -333,7 +333,7 @@ Tu modelo puede usar herramientas de otros programas con
 Cómo se tratan:
 
 - **En tu Mac**: es un programa que se ejecuta fuera del sandbox y con tus
-  permisos. forge enseña la orden entera antes de arrancarlo.
+  permisos. Karbyx enseña la orden entera antes de arrancarlo.
 - **Remotos** (*Streamable HTTP*; el transporte antiguo, SSE, no): **lo que el
   modelo les mande sale de tu Mac**. Si piden cuenta, **Iniciar sesión** abre tu
   navegador. Si el servicio no deja iniciar sesión desde otros programas, créale
@@ -347,8 +347,8 @@ Cómo se tratan:
 - **Cada herramienta ocupa contexto** (el panel dice cuánto). Actívalos solo en
   los proyectos que los usan, y apaga las herramientas que sobren.
 
-Se guardan en `~/.config/forge/mcp.json` y las sesiones iniciadas, en
-`~/Library/Application Support/forge/chat.sesiones`: solo los puedes leer tú, y los
+Se guardan en `~/.config/karbyx/mcp.json` y las sesiones iniciadas, en
+`~/Library/Application Support/karbyx/chat.sesiones`: solo los puedes leer tú, y los
 comandos del sandbox no los ven. *Cerrar sesión* la olvida en este Mac; para
 retirar el permiso del todo, hazlo en la web del servicio.
 
@@ -365,14 +365,14 @@ retirar el permiso del todo, hazlo en la web del servicio.
   internet. Pon siempre una clave: sin ella, cualquiera de tu red puede usar el
   modelo.
 - Los servidores y sus claves se guardan en
-  `~/Library/Application Support/forge/chat.json`, que solo tú puedes leer.
+  `~/Library/Application Support/karbyx/chat.json`, que solo tú puedes leer.
 - Las **conversaciones** se guardan sin cifrar en
-  `~/Library/Application Support/forge/chat.d`, también solo para ti, con lo que
-  el modelo haya leído de tus archivos. Borrarlas en forge las borra del disco.
+  `~/Library/Application Support/karbyx/chat.d`, también solo para ti, con lo que
+  el modelo haya leído de tus archivos. Borrarlas en Karbyx las borra del disco.
 
 #### Qué sale de tu Mac
 
-Por sí solo, forge habla únicamente con tu servidor de modelos. Lo demás solo
+Por sí solo, Karbyx habla únicamente con tu servidor de modelos. Lo demás solo
 ocurre si tú lo haces, lo añades o lo permites:
 
 | Cuándo | Adónde va | Qué |
@@ -394,7 +394,7 @@ CLI y Gemini CLI. Cada agente tiene
 temperatura: los que trabajan laten como brasas, el que te espera está al rojo
 y lo terminado se enfría a acero.
 
-- **«¿Qué hay que hacer?»**: escribe la tarea y pulsa ↵. forge lanza un agente
+- **«¿Qué hay que hacer?»**: escribe la tarea y pulsa ↵. Karbyx lanza un agente
   en un **worktree propio** del proyecto elegido, con la tarea ya escrita. ⇧⇥
   cambia quién la hace (tu modelo local, si tienes un servidor, o un asistente
   instalado) y ⇥, el proyecto (los de tus terminales abiertas). Fuera de un
@@ -403,7 +403,7 @@ y lo terminado se enfría a acero.
   ejecuta en el sandbox; lo demás se pregunta) y como una conversación más, que
   puedes abrir y seguir. Al acabar se verifica, se revisa y se fusiona igual que
   las demás. Sin repositorio git trabaja en la carpeta y pregunta antes. Una
-  conversación reabierta tras cerrar forge vuelve a preguntar.
+  conversación reabierta tras cerrar Karbyx vuelve a preguntar.
 - **Columnas**: *Trabajando*, *Te necesita*, *Para revisar* y *Hecho hoy*.
   Cada tarjeta muestra la tarea, el proyecto y la rama, lo que hace ahora,
   una **miniatura en vivo de su terminal** (un minimapa con los colores
@@ -412,12 +412,12 @@ y lo terminado se enfría a acero.
 - **Responder sin entrar**: cuando un agente te pide permiso («¿Aplico este
   cambio en login.rs?»), su tarjeta muestra la pregunta y un botón por opción
   (*Sí*, *Sí, siempre*, *No*). Un clic, o la tecla 1-3 con la tarjeta
-  seleccionada, responde en su terminal. forge vuelve a leer la pantalla antes
+  seleccionada, responde en su terminal. Karbyx vuelve a leer la pantalla antes
   de enviar nada: si la pregunta ya no está, no responde.
-- **Verificación automática**: cuando un agente termina en su worktree, forge
+- **Verificación automática**: cuando un agente termina en su worktree, Karbyx
   puede ejecutar los tests en segundo plano, sin gastar tokens, y la tarjeta
   llega a *Para revisar* con un sello: **✓ 36 tests en verde** o **✕ 2 tests
-  fallan** (o *No compila*). Viene desactivada: la primera vez forge pregunta
+  fallan** (o *No compila*). Viene desactivada: la primera vez Karbyx pregunta
   **¿Verifico?** y eliges *Una vez* o *Siempre* (en ese proyecto). Con un
   fallo, **Que lo arregle** le pasa al agente la salida completa; ↻ repite y
   **Verificar** la lanza a mano (p. ej. con Codex o Gemini, que no avisan de
@@ -431,11 +431,11 @@ y lo terminado se enfría a acero.
     caché de compilación y una carpeta temporal. Si no se puede aislar, no se
     ejecuta. El resto de tus archivos sí se puede leer.
   - Si el agente ha cambiado algo que decide qué se ejecuta (`Makefile`,
-    `build.rs`, `Cargo.toml`, `package.json`...), forge lo dice y espera a que
+    `build.rs`, `Cargo.toml`, `package.json`...), Karbyx lo dice y espera a que
     pulses *Verificar*, aunque el proyecto esté activado.
   - Si tus tests necesitan red (o `localhost`): `[verify] network = ["proyecto"]`.
     Con red, un test podría enviar fuera lo que puede leer.
-  - Los proyectos activados están en `~/Library/Caches/forge/verify-projects.txt`,
+  - Los proyectos activados están en `~/Library/Caches/karbyx/verify-projects.txt`,
     uno por línea: borra la línea para desactivarlo.
 - **Conversaciones del chat**: las abiertas y las de hoy salen en las mismas
   columnas. Se puede permitir o negar un cambio desde la tarjeta; los comandos y
@@ -483,7 +483,7 @@ borde, el historial se desplaza solo. Los divisores entre
 paneles se arrastran. Si la aplicación pide el ratón (vim, htop, tmux) los
 clics le llegan a ella; con ⇧ se fuerza la selección normal.
 
-### Agentes externos: forge sabe qué hacen
+### Agentes externos: Karbyx sabe qué hacen
 
 Con Claude Code, Codex CLI y Gemini CLI, en la mesa o en una terminal:
 
@@ -500,15 +500,15 @@ Con Claude Code, Codex CLI y Gemini CLI, en la mesa o en una terminal:
   asistente, los agentes abiertos con los tokens que lleva cada sesión (Claude)
   y los proyectos que más consumen esta semana.
 
-Con **Claude Code** el estado es exacto: forge lo lanza con
+Con **Claude Code** el estado es exacto: Karbyx lo lanza con
 `--settings` y unos *hooks* que le cuentan cada paso (también si escribes
-`claude` a mano en una terminal de forge). Tus ajustes de Claude no se tocan.
+`claude` a mano en una terminal de Karbyx). Tus ajustes de Claude no se tocan.
 Con otros agentes (Codex, Gemini...) se deduce de su actividad.
 
 ### Los agentes externos ven tus terminales (MCP)
 
-forge es también un servidor [MCP](https://modelcontextprotocol.io): un
-agente que corre dentro de forge puede ver las otras terminales sin que
+Karbyx es también un servidor [MCP](https://modelcontextprotocol.io): un
+agente que corre dentro de Karbyx puede ver las otras terminales sin que
 copies nada. Pídele, por ejemplo, «mira el error de la otra terminal» o «¿por
 qué ha fallado lo último que ejecuté?». Herramientas, todas de **solo
 lectura** (un agente nunca escribe en tus terminales):
@@ -521,17 +521,17 @@ lectura** (un agente nunca escribe en tus terminales):
 | `read_command` | Un comando con su salida completa (por defecto el último; `failed` = el último que falló) |
 
 Sin indicar terminal, usan la que tienes delante o la última que usaste.
-**Claude Code** lo trae configurado: forge lo lanza con `--mcp-config` y
+**Claude Code** lo trae configurado: Karbyx lo lanza con `--mcp-config` y
 permite estas herramientas sin preguntar (compruébalo con `/mcp`). Para otros
-clientes MCP, añade un servidor stdio con el comando `forge-app mcp`; solo
-funciona dentro de una terminal de forge.
+clientes MCP, añade un servidor stdio con el comando `karbyx-app mcp`; solo
+funciona dentro de una terminal de Karbyx.
 
 ### Un worktree por agente y revisión de cambios
 
 Para que varios agentes trabajen en el mismo proyecto sin pisarse, **⌘⇧A**
 abre el agente en su **propio worktree de git**: una copia del repositorio en
 `<proyecto>.worktrees/agente-N`, junto al proyecto, con su rama
-`forge/agente-N` creada desde el último commit (lo que tengas sin commit no
+`karbyx/agente-N` creada desde el último commit (lo que tengas sin commit no
 se lleva). La barra lateral lo marca con `⎇ agente-N`.
 
 **⌘R** abre el panel **Revisar cambios** del panel activo: la lista de
@@ -550,7 +550,7 @@ terminal en esa carpeta y ⌘R lo vuelve a encontrar.
 
 ### Bloques de comandos (estilo Warp)
 
-Con zsh, forge activa sola una integración con la shell (no toca tu
+Con zsh, Karbyx activa sola una integración con la shell (no toca tu
 `.zshrc`): cada comando y su salida forman un **bloque**.
 
 - Un separador fino entre comandos; los que fallan llevan una barra y un tinte
@@ -560,13 +560,13 @@ Con zsh, forge activa sola una integración con la shell (no toca tu
 - En un bloque fallido aparece **◆ Preguntar a Claude** (o al asistente
   activo): abre al lado una sesión con el comando, el error y la salida ya
   escritos.
-- Si un comando largo termina mientras forge no está a la vista, llega un
+- Si un comando largo termina mientras Karbyx no está a la vista, llega un
   aviso de macOS.
 
 Las marcas son el estándar OSC 133, así que también funcionan con otras
 shells que las emitan (bash con su propia integración, fish, starship...).
 
-### Configuración (`~/.config/forge/forge.toml`)
+### Configuración (`~/.config/karbyx/karbyx.toml`)
 
 Se aplica al guardar, sin reiniciar:
 
@@ -595,7 +595,7 @@ auto = true                # solo en los proyectos que actives; false: en ningun
 network = []               # proyectos cuyos tests necesitan red
 timeout_secs = 600
 [verify.commands]          # por proyecto (nombre de la carpeta); "off" la desactiva
-forge = "cargo test --workspace"
+karbyx = "cargo test --workspace"
 
 [keys]                     # redefine atajos; "none" desactiva
 split_right = "cmd+d"
@@ -613,9 +613,9 @@ Acciones configurables: `copy`, `paste`, `select_all`, `quit`, `new_tab`, `new_a
 
 El panel derecho de consumo aparece solo cuando la pestaña activa tiene una
 sesión de IA (abierta con ⌘⇧C o un `claude`/`codex`/`gemini` lanzado a mano) y
-muestra la vista de ese asistente. Por defecto forge detecta qué asistentes
+muestra la vista de ese asistente. Por defecto Karbyx detecta qué asistentes
 tienes instalados y muestra una pestaña por cada uno en ese panel. Se puede elegir en
-`~/.config/forge/usage.toml`:
+`~/.config/karbyx/usage.toml`:
 
 ```toml
 providers = ["auto"]            # o ["claude", "codex", "gemini"]
@@ -628,7 +628,7 @@ weekly_tokens = 300_000_000
 weekly_reset = "monday"
 ```
 
-Codex publica sus límites oficiales en su historial; forge los muestra tal
+Codex publica sus límites oficiales en su historial; Karbyx los muestra tal
 cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 `claude.toml` se sigue leyendo si no existe `usage.toml`.
 
@@ -637,23 +637,23 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ```bash
 scripts/check.sh               # formato, clippy y tests: lo que tiene que pasar antes de subir un cambio
 cargo test --workspace         # dentro del sandbox, lo que ahí no se puede probar se salta y lo dice (SALTADO)
-cargo test -p forge-agent live -- --ignored     # contra el registro MCP y skills.sh de verdad (necesita red)
-cargo run --release -p forge-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
-FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app   # vuelca un frame a PNG
-FORGE_PROVIDER=codex cargo run --release -p forge-app               # arranca con ese asistente
-FORGE_SELFTEST=1 cargo run --release -p forge-app                   # teclea solo y registra frames lentos
-FORGE_PROFILE=1 FORGE_SELFTEST=1 cargo run --release -p forge-app  # registra el tiempo de todos los frames
-FORGE_CONFIG=/tmp/prueba.toml cargo run --release -p forge-app      # usa otra configuración
-FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con una pestaña de IA simulada
-FORGE_CAPTURE_AI=real FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
-FORGE_CAPTURE_INBOX=1 FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con la bandeja ⌘J
-FORGE_CAPTURE_DASH=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con el panel de mando ⌘U
-FORGE_CAPTURE_CHAT="1500:hola" FORGE_CHAT_STATE=/tmp/chat.json FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # el chat
-FORGE_CAPTURE_CHAT=$'1500:!skill\n2200:!keys pdf\n2800:!fetch' FORGE_SKILLS=/tmp/skills FORGE_MCP=/tmp/mcp.json FORGE_CHAT_STATE=/tmp/chat.json FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # los paneles, sin tocar tus habilidades ni tus MCP
-FORGE_CAPTURE_BOARD=1 FORGE_CAPTURE_LAUNCH="tarea" FORGE_CAPTURE_AI=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # la mesa, lanzando una tarea
-FORGE_CAPTURE_WORKTREE=1 FORGE_CAPTURE_AI=1 FORGE_CAPTURE_REVIEW=1 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # agente en worktree y panel ⌘R
-echo '{"hook_event_name":"Stop"}' | FORGE_SOCKET=~/Library/Caches/forge/sock/<pid>.sock FORGE_PANE=1 forge-app hook  # simula un hook
-FORGE_TYPE=$'ls\nfalse\n' FORGE_CAPTURE_SELECT=1 FORGE_CAPTURE_DELAY=7000 FORGE_SCREENSHOT=/tmp/f.png cargo run --release -p forge-app  # captura con bloques
+cargo test -p karbyx-agent live -- --ignored     # contra el registro MCP y skills.sh de verdad (necesita red)
+cargo run --release -p karbyx-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
+KARBYX_SCREENSHOT=/tmp/karbyx.png cargo run --release -p karbyx-app   # vuelca un frame a PNG
+KARBYX_PROVIDER=codex cargo run --release -p karbyx-app               # arranca con ese asistente
+KARBYX_SELFTEST=1 cargo run --release -p karbyx-app                   # teclea solo y registra frames lentos
+KARBYX_PROFILE=1 KARBYX_SELFTEST=1 cargo run --release -p karbyx-app  # registra el tiempo de todos los frames
+KARBYX_CONFIG=/tmp/prueba.toml cargo run --release -p karbyx-app      # usa otra configuración
+KARBYX_CAPTURE_AI=1 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # captura con una pestaña de IA simulada
+KARBYX_CAPTURE_AI=real KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # captura con Claude de verdad (sin escribirle: no gasta tokens)
+KARBYX_CAPTURE_INBOX=1 KARBYX_CAPTURE_AI=1 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # captura con la bandeja ⌘J
+KARBYX_CAPTURE_DASH=1 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # captura con el panel de mando ⌘U
+KARBYX_CAPTURE_CHAT="1500:hola" KARBYX_CHAT_STATE=/tmp/chat.json KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # el chat
+KARBYX_CAPTURE_CHAT=$'1500:!skill\n2200:!keys pdf\n2800:!fetch' KARBYX_SKILLS=/tmp/skills KARBYX_MCP=/tmp/mcp.json KARBYX_CHAT_STATE=/tmp/chat.json KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # los paneles, sin tocar tus habilidades ni tus MCP
+KARBYX_CAPTURE_BOARD=1 KARBYX_CAPTURE_LAUNCH="tarea" KARBYX_CAPTURE_AI=1 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # la mesa, lanzando una tarea
+KARBYX_CAPTURE_WORKTREE=1 KARBYX_CAPTURE_AI=1 KARBYX_CAPTURE_REVIEW=1 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # agente en worktree y panel ⌘R
+echo '{"hook_event_name":"Stop"}' | KARBYX_SOCKET=~/Library/Caches/karbyx/sock/<pid>.sock KARBYX_PANE=1 karbyx-app hook  # simula un hook
+KARBYX_TYPE=$'ls\nfalse\n' KARBYX_CAPTURE_SELECT=1 KARBYX_CAPTURE_DELAY=7000 KARBYX_SCREENSHOT=/tmp/f.png cargo run --release -p karbyx-app  # captura con bloques
 ```
 
 ## Contribuir
@@ -663,7 +663,7 @@ Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir un *pull request*.
 
 ## Licencia
 
-Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge.
+Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de Karbyx.
 
 Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
 los términos de la **Licencia Pública General de GNU** publicada por la Free

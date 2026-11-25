@@ -908,83 +908,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
-name = "forge-agent"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "ignore",
- "libc",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "similar",
- "ureq",
-]
-
-[[package]]
-name = "forge-ai"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "toml",
- "walkdir",
-]
-
-[[package]]
-name = "forge-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "bytemuck",
- "chrono",
- "dirs",
- "env_logger",
- "forge-agent",
- "forge-ai",
- "forge-term",
- "glyphon",
- "libc",
- "log",
- "objc2-foundation 0.3.2",
- "png",
- "pollster",
- "serde",
- "serde_json",
- "toml",
- "wgpu",
- "winit",
-]
-
-[[package]]
-name = "forge-term"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "crossbeam-channel",
- "dirs",
- "libc",
-]
-
-[[package]]
-name = "forge-usage"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "forge-ai",
- "owo-colors",
- "serde_json",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1409,6 +1332,83 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "karbyx-agent"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "ignore",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "ureq",
+]
+
+[[package]]
+name = "karbyx-ai"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "toml",
+ "walkdir",
+]
+
+[[package]]
+name = "karbyx-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "bytemuck",
+ "chrono",
+ "dirs",
+ "env_logger",
+ "glyphon",
+ "karbyx-agent",
+ "karbyx-ai",
+ "karbyx-term",
+ "libc",
+ "log",
+ "objc2-foundation 0.3.2",
+ "png",
+ "pollster",
+ "serde",
+ "serde_json",
+ "toml",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "karbyx-term"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "crossbeam-channel",
+ "dirs",
+ "libc",
+]
+
+[[package]]
+name = "karbyx-usage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "karbyx-ai",
+ "owo-colors",
+ "serde_json",
 ]
 
 [[package]]

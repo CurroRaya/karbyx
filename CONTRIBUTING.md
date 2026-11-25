@@ -1,18 +1,18 @@
-# Cómo contribuir a forge
+# Cómo contribuir a Karbyx
 
-¡Gracias por querer mejorar forge! Cualquier ayuda cuenta: informar de un
+¡Gracias por querer mejorar Karbyx! Cualquier ayuda cuenta: informar de un
 fallo, proponer una idea, mejorar la documentación o enviar código.
 
 ## Informar de un fallo o proponer una idea
 
 Abre un *issue* en GitHub. Para los fallos, incluye:
 
-- Versión de macOS y cómo lanzas forge.
+- Versión de macOS y cómo lanzas Karbyx.
 - Pasos para reproducirlo y qué esperabas que pasara.
 - Si es del chat: qué servidor y modelo usas, y su contexto. No pegues tu clave.
 - Si es de un servidor MCP o una habilidad: cuál es y el error que enseña su panel.
   Quita antes las claves.
-- Si es de rendimiento, la salida de `FORGE_PROFILE=1 forge-app`.
+- Si es de rendimiento, la salida de `KARBYX_PROFILE=1 karbyx-app`.
 
 ## Enviar cambios
 
@@ -25,7 +25,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
    ```
 
 3. Si tocas la interfaz, adjunta una captura. Puedes generarla sin permisos
-   especiales con `FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app`
+   especiales con `KARBYX_SCREENSHOT=/tmp/karbyx.png cargo run --release -p karbyx-app`
    (en el README hay más ayudas de desarrollo).
 4. Abre el *pull request* explicando qué cambia y por qué.
 
@@ -36,7 +36,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 
   ```rust
   // SPDX-License-Identifier: GPL-3.0-or-later
-  // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
+  // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de Karbyx
   ```
 
 - Un test que necesite puertos, Python o crear un sandbox empieza con
@@ -47,7 +47,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 
 ## Licencia de las contribuciones
 
-forge se publica bajo la licencia **GPL-3.0 o posterior**. Al enviar una
+Karbyx se publica bajo la licencia **GPL-3.0 o posterior**. Al enviar una
 contribución aceptas que se distribuya bajo esa misma licencia. Así, todas las
 mejoras siguen siendo libres para todo el mundo: nadie puede publicar una
-versión modificada de forge sin compartir también su código.
+versión modificada de Karbyx sin compartir también su código.

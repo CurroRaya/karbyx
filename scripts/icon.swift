@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
+// Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de Karbyx
 //
-// Dibuja el icono de forge (un lingote al rojo con el prompt grabado) en PNG.
+// Dibuja el icono de Karbyx (un lingote al rojo con el prompt grabado) en PNG.
 // Uso: swift scripts/icon.swift salida.png [tamaño]
 
 import AppKit
 
 let args = CommandLine.arguments
-let out = args.count > 1 ? args[1] : "forge.png"
+let out = args.count > 1 ? args[1] : "karbyx.png"
 let size = CGFloat(args.count > 2 ? Double(args[2])! : 1024)
 let s = size / 1024
 
