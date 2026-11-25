@@ -217,6 +217,18 @@ pub enum Phase {
 /// Posición en el texto de la conversación: elemento, trozo y lugar.
 pub type DocPos = (usize, usize, TextPos);
 
+const DOC_START: DocPos = (0, 0, (0, 0));
+
+/// Cuánto se sale `y` de una zona: negativo, por arriba.
+pub fn outside(a: Area, y: f32) -> f32 {
+    if y < a.y { y - a.y } else { (y - a.bottom()).max(0.0) }
+}
+
+/// Píxeles por segundo al arrastrar `over` píxeles fuera de una zona de alto `h`.
+pub fn scroll_speed(over: f32, h: f32) -> f32 {
+    (over * 12.0).clamp(-4.0 * h, 4.0 * h)
+}
+
 pub struct Chat {
     pub id: u64,
     pub title: String,
@@ -245,9 +257,14 @@ pub struct Chat {
     pub scroll: f32,
     /// Pegado al final (sigue lo que llega).
     pub stick: bool,
-    pub view_h: f32,
+    /// Zona donde se ve la conversación.
+    pub view: Area,
     pub content_h: f32,
     pub sel: Option<(DocPos, DocPos)>,
+    /// Último clic en la conversación: desde ahí se extiende la selección.
+    anchor: Option<DocPos>,
+    /// Se ha desplazado mientras se arrastra: la selección sigue al ratón.
+    follow: bool,
     /// Textos visibles en el último frame, para la selección.
     pub placed: Vec<draw::Placed>,
     /// Caja de escritura en el último frame.
@@ -275,9 +292,11 @@ impl Chat {
             unseen: false,
             scroll: 0.0,
             stick: true,
-            view_h: 0.0,
+            view: Area::new(0.0, 0.0, 0.0, 0.0),
             content_h: 0.0,
             sel: None,
+            anchor: None,
+            follow: false,
             placed: Vec::new(),
             input_at: None,
         }
@@ -550,15 +569,21 @@ impl Chat {
         }
     }
 
+    /// Final de la conversación, para seleccionar hasta él.
+    fn doc_end(&self) -> DocPos {
+        (self.items.len().saturating_sub(1), usize::MAX, (usize::MAX, usize::MAX))
+    }
+
     /// Texto plano de la selección.
     fn selected_text(&self) -> Option<String> {
         let (a, b) = self.sel?;
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let mut out = String::new();
         let mut last: Option<usize> = None;
+        let mut started = false;
         for (i, item) in self.items.iter().enumerate().take(b.0 + 1).skip(a.0) {
             let Some(c) = &item.cache else { continue };
-            for (j, text) in c.texts() {
+            for draw::Copied { piece: j, lead, text } in c.copied() {
                 if (i, j) < (a.0, a.1) || (i, j) > (b.0, b.1) {
                     continue;
                 }
@@ -569,10 +594,16 @@ impl Chat {
                 };
                 let from = if (i, j) == (a.0, a.1) { at(a.2) } else { 0 };
                 let to = if (i, j) == (b.0, b.1) { at(b.2) } else { text.len() };
-                if let Some(l) = last {
-                    out.push_str(if l == i { "\n" } else { "\n\n" });
+                if started && last != Some(i) {
+                    out.push_str("\n\n");
                 }
-                last = Some(i);
+                // La separación sobra al empezar; la viñeta, si se coge a medias.
+                if started && last == Some(i) {
+                    out.push_str(&lead);
+                } else if from == 0 {
+                    out.push_str(lead.trim_start_matches(['\n', '\t']));
+                }
+                (started, last) = (true, Some(i));
                 out.push_str(text.get(from..to).unwrap_or_default());
             }
         }
@@ -1655,6 +1686,7 @@ impl App {
                 self.chats.popup = Popup::None;
                 if let Some(c) = self.chats.current_mut() {
                     c.input.insert(t);
+                    c.anchor = None;
                 }
                 self.slash_changed();
             }
@@ -1757,7 +1789,9 @@ impl App {
             match ch.to_lowercase().as_str() {
                 "v" => self.chat_paste(),
                 "a" => {
-                    if let Some(e) = self.chat_editor() {
+                    if !self.chat_select_all()
+                        && let Some(e) = self.chat_editor()
+                    {
                         e.select_all();
                     }
                 }
@@ -1834,7 +1868,7 @@ impl App {
                     self.chat_answer(id, Decision::Deny(String::new()));
                 } else if self.chats.current().is_some_and(|c| c.sel.is_some()) {
                     if let Some(c) = self.chats.current_mut() {
-                        c.sel = None;
+                        (c.sel, c.anchor) = (None, None);
                     }
                 } else {
                     self.chat_stop();
@@ -1874,12 +1908,15 @@ impl App {
                     e.go(m, shift);
                 }
             }
+            NamedKey::ArrowUp | NamedKey::ArrowDown
+                if cmd && shift && self.chat_select_to(*named == NamedKey::ArrowUp) => {}
             NamedKey::ArrowUp | NamedKey::ArrowDown => {
                 self.chat_vertical(*named == NamedKey::ArrowUp, cmd, shift)
             }
+            NamedKey::Home | NamedKey::End if shift && self.chat_select_to(*named == NamedKey::Home) => {}
             NamedKey::Home | NamedKey::End => self.chat_scroll_to(*named == NamedKey::Home),
             NamedKey::PageUp | NamedKey::PageDown => {
-                let page = self.chats.current().map_or(0.0, |c| c.view_h * 0.85);
+                let page = self.chats.current().map_or(0.0, |c| c.view.h * 0.85);
                 self.chat_wheel(if *named == NamedKey::PageUp { page } else { -page });
             }
             _ => return false,
@@ -1958,14 +1995,15 @@ impl App {
     /// Desplaza la conversación (positivo: hacia arriba).
     pub(super) fn chat_wheel(&mut self, px: f32) {
         let Some(c) = self.chats.current_mut() else { return };
-        let max = (c.content_h - c.view_h).max(0.0);
+        let max = (c.content_h - c.view.h).max(0.0);
         c.scroll = (c.scroll - px).clamp(0.0, max);
         c.stick = c.scroll >= max - 2.0;
+        c.follow = true;
         self.redraw();
     }
 
     /// Posición del texto bajo el ratón (o la más cercana).
-    fn chat_doc_pos(&self, x: f32, y: f32, exact: bool) -> Option<DocPos> {
+    fn chat_doc_pos(&self, x: f32, y: f32) -> Option<DocPos> {
         let (g, c) = (self.gfx.as_ref()?, self.chats.current()?);
         let d = |a: &Area| {
             let dy = (a.y - y).max(y - a.bottom()).max(0.0);
@@ -1973,9 +2011,12 @@ impl App {
             dy * 4.0 + dx
         };
         let p = c.placed.iter().min_by(|a, b| d(&a.area).total_cmp(&d(&b.area)))?;
-        if exact && d(&p.area) > 0.0 {
-            return None;
-        }
+        // Más arriba o más abajo de la conversación, la línea entera.
+        let x = match outside(c.view, y) {
+            o if o < 0.0 => p.area.x,
+            o if o > 0.0 => p.area.right(),
+            _ => x,
+        };
         Some((p.item, p.piece, g.rich_hit(p.key, x - p.area.x, y - p.area.y)?))
     }
 
@@ -1993,7 +2034,7 @@ impl App {
         if let (Some(at), Some(g)) = (&c.input_at, &self.gfx)
             && at.area.inset(-8.0 * g.scale()).contains(x, y)
         {
-            c.sel = None;
+            (c.sel, c.anchor) = (None, None);
             if let Some(p) = g.rich_hit(at.key, x - at.area.x, y - at.area.y) {
                 let b = c.input.byte(p);
                 c.input.place(b, shift);
@@ -2005,9 +2046,18 @@ impl App {
             self.redraw();
             return Some(true);
         }
-        let pos = self.chat_doc_pos(x, y, true);
+        // En cualquier punto de la conversación, aunque no caiga en un texto.
+        let pos = if c.view.contains(x, y) { self.chat_doc_pos(x, y) } else { None };
         if let Some(c) = self.chats.current_mut() {
-            c.sel = pos.map(|p| (p, p));
+            // Con ⇧ se extiende desde donde se empezó o desde el último clic.
+            let from = c.sel.map(|s| s.0).or(c.anchor).filter(|_| shift).or(pos);
+            c.sel = from.zip(pos);
+            c.anchor = from;
+            c.follow = false;
+            if pos.is_some() {
+                let at = c.input.caret();
+                c.input.place(at, false);
+            }
         }
         self.redraw();
         pos.map(|_| false)
@@ -2022,13 +2072,63 @@ impl App {
                 let b = c.input.byte(p);
                 c.input.place(b, true);
             }
-        } else if let Some(p) = self.chat_doc_pos(x, y, false)
+        } else if let Some(p) = self.chat_doc_pos(x, y)
             && let Some(c) = self.chats.current_mut()
             && let Some(s) = &mut c.sel
         {
             s.1 = p;
         }
         self.redraw();
+    }
+
+    /// Tras dibujar, con la selección en marcha: si el ratón está fuera de la
+    /// conversación la desplaza, y la selección sigue al ratón.
+    pub(super) fn chat_drag_tick(&mut self, dt: f32) {
+        let (x, y) = self.cursor;
+        let Some(c) = self.chats.current_mut() else { return };
+        if c.sel.is_none() {
+            return;
+        }
+        let over = outside(c.view, y);
+        let (scroll, max) = (c.scroll, (c.content_h - c.view.h).max(0.0));
+        if over != 0.0 {
+            let next = (scroll + scroll_speed(over, c.view.h) * dt).clamp(0.0, max);
+            if next.round() != scroll {
+                c.scroll = next;
+                c.stick = next >= max - 2.0;
+                c.follow = true;
+            }
+        }
+        if std::mem::take(&mut c.follow) {
+            self.chat_drag(x, y, false);
+        }
+    }
+
+    /// Selecciona toda la conversación, si toca (⌘A). Con algo escrito, antes
+    /// se selecciona lo escrito.
+    fn chat_select_all(&mut self) -> bool {
+        if !matches!(self.chats.popup, Popup::None) {
+            return false;
+        }
+        let Some(c) = self.chats.current_mut() else { return false };
+        let whole = c.input.selected().is_some_and(|s| s.len() == c.input.text().len());
+        if c.items.is_empty() || !(c.input.is_empty() || whole || c.anchor.is_some()) {
+            return false;
+        }
+        c.sel = Some((DOC_START, c.doc_end()));
+        c.anchor = Some(DOC_START);
+        let at = c.input.caret();
+        c.input.place(at, false);
+        true
+    }
+
+    /// Extiende la selección hasta el principio o el final de la conversación.
+    fn chat_select_to(&mut self, top: bool) -> bool {
+        let Some(c) = self.chats.current_mut() else { return false };
+        let Some(from) = c.anchor else { return false };
+        c.sel = Some((from, if top { DOC_START } else { c.doc_end() }));
+        self.chat_scroll_to(top);
+        true
     }
 
     /// Fin del arrastre: un clic sin mover no deja selección.
@@ -2139,6 +2239,22 @@ impl App {
             "!board" => self.show_board(true),
             "!side" => self.chats.side_scroll = 520.0,
             "!models" => self.chats.popup = Popup::Models,
+            // Arrastrar sin soltar, soltar, y seleccionar todo o hasta el final.
+            t if t.starts_with("!hold ") => {
+                let n: Vec<f32> = t[6..].split(' ').filter_map(|v| v.parse().ok()).collect();
+                if let [x, y, x2, y2] = n[..] {
+                    self.drag = self.chat_press(x, y, false).map(crate::Drag::Chat);
+                    self.cursor = (x2, y2);
+                    self.redraw();
+                }
+            }
+            "!release" => {
+                self.drag = None;
+                self.chat_drag_end();
+                eprintln!("selección: {:?}", self.chats.current().and_then(Chat::selected_text));
+            }
+            "!all" => drop(self.chat_select_all()),
+            "!toend" => drop(self.chat_select_to(false)),
             "!modes" => self.chat_click(ChatHit::ModeMenu),
             "!full" => self.chat_click(ChatHit::PickMode(Mode::Full)),
             "!projects" => self.chats.popup = Popup::Projects,

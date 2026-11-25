@@ -22,6 +22,8 @@ pub enum Action {
     NewAi,
     /// Cierra el panel activo (o la pestaña si es el último).
     Close,
+    /// Seleccionar todo el contenido de la terminal.
+    SelectAll,
     SelectTab(usize),
     NextTab,
     PrevTab,
@@ -61,6 +63,7 @@ pub enum Action {
 const NAMES: &[(&str, Action)] = &[
     ("paste", Action::Paste),
     ("copy", Action::Copy),
+    ("select_all", Action::SelectAll),
     ("quit", Action::Quit),
     ("new_tab", Action::NewTab),
     ("new_ai", Action::NewAi),
@@ -97,6 +100,7 @@ const NAMES: &[(&str, Action)] = &[
 const DEFAULTS: &[(&str, &str)] = &[
     ("paste", "cmd+v"),
     ("copy", "cmd+c"),
+    ("select_all", "cmd+a"),
     ("quit", "cmd+q"),
     ("new_tab", "cmd+t"),
     ("new_ai", "cmd+shift+c"),

@@ -77,6 +77,25 @@ fn selection_word_line_and_drag() {
 }
 
 #[test]
+fn selection_goes_beyond_the_screen() {
+    use forge_term::SelectionKind;
+    let lines: String = (1..=30).map(|i| format!("linea{i:02}\\n")).collect();
+    let s = spawn_printing(&lines);
+    wait_for(&s, |sn| sn.row(4).iter().map(|c| c.c).collect::<String>().starts_with("linea30"));
+
+    s.select_all();
+    let t = s.selection_text().unwrap();
+    assert!(t.starts_with("linea01") && t.contains("linea15") && t.trim_end().ends_with("linea30"));
+
+    // Se empieza abajo, se desplaza y se sigue arriba.
+    s.start_selection(SelectionKind::Simple, 4, 6, true);
+    s.scroll(20);
+    s.update_selection(0, 0, false);
+    let t = s.selection_text().unwrap();
+    assert!(t.starts_with("linea06") && t.ends_with("linea30"), "{t}");
+}
+
+#[test]
 fn search_highlights_and_steps() {
     let s = spawn_printing("uno Forge\\ndos forge\\ntres");
     wait_for(&s, |sn| sn.row(2).iter().map(|c| c.c).collect::<String>().starts_with("tres"));

@@ -410,6 +410,8 @@ struct App {
     pane_areas: Vec<(PaneId, Area)>,
     dividers: Vec<Divider>,
     drag: Option<Drag>,
+    /// Último fotograma con un arrastre en marcha.
+    drag_at: Option<Instant>,
     last_click: Option<LastClick>,
     search: Option<SearchUi>,
     /// Bloque seleccionado (panel, bloque) y bloque bajo el ratón.
@@ -477,6 +479,7 @@ impl App {
             pane_areas: Vec::new(),
             dividers: Vec::new(),
             drag: None,
+            drag_at: None,
             last_click: None,
             search: None,
             selected_block: None,
@@ -793,6 +796,7 @@ impl App {
                     | Action::ClearScreen
                     | Action::Paste
                     | Action::Copy
+                    | Action::SelectAll
                     | Action::Focus(_)
                     | Action::BlockPrev
                     | Action::BlockNext
@@ -913,6 +917,12 @@ impl App {
                 if let (Some(t), Some(c)) = (text, self.clipboard.as_mut()) {
                     let _ = c.set_text(t);
                 }
+            }
+            Action::SelectAll => {
+                if let Some(p) = self.focused_pane() {
+                    p.session.select_all();
+                }
+                self.redraw();
             }
             Action::ClearScreen => {
                 if let Some(p) = self.focused_pane() {
@@ -1173,6 +1183,16 @@ impl App {
             _ => 1,
         };
         self.last_click = Some(LastClick { at: now, pane: id, row, col, count });
+        // ⇧ extiende la selección hasta aquí.
+        if self.mods.shift_key()
+            && count == 1
+            && self.panes.get(&id).is_some_and(|p| p.session.has_selection())
+        {
+            self.extend_selection(id, x, y);
+            self.drag = Some(Drag::Select(id));
+            self.redraw();
+            return;
+        }
         let kind = match count {
             2 => SelectionKind::Word,
             3 => SelectionKind::Line,
@@ -1199,14 +1219,7 @@ impl App {
                 }
             }
             Some(Drag::Chat(_)) => self.chat_drag_end(),
-            Some(Drag::Select(id)) => {
-                // Un clic simple sin arrastrar no deja selección.
-                if let Some(p) = self.panes.get(&id)
-                    && p.session.selection_text().is_none()
-                {
-                    p.session.clear_selection();
-                }
-            }
+            // Un clic sin arrastrar no selecciona nada, pero desde ahí se extiende con ⇧.
             _ => {}
         }
         self.redraw();
@@ -1216,13 +1229,8 @@ impl App {
         let (x, y) = self.cursor;
         match self.drag.clone() {
             Some(Drag::Select(id)) => {
-                if let Some((_, area)) = self.pane_areas.iter().find(|(p, _)| *p == id).copied()
-                    && let Some((row, col, right)) = self.cell_under(id, area)
-                    && let Some(p) = self.panes.get(&id)
-                {
-                    p.session.update_selection(row, col, right);
-                    self.redraw();
-                }
+                self.extend_selection(id, x, y);
+                self.redraw();
             }
             Some(Drag::Divider(d)) => {
                 let ratio = match d.dir {
@@ -1328,6 +1336,9 @@ impl App {
             pane.session.write(seq.repeat(whole.unsigned_abs() as usize));
         } else {
             pane.session.scroll(whole);
+            if matches!(self.drag, Some(Drag::Select(d)) if d == id) {
+                self.extend_selection(id, self.cursor.0, self.cursor.1);
+            }
         }
         self.redraw();
     }
@@ -1985,11 +1996,68 @@ impl App {
         );
         prof.mark("draw");
         prof.report();
-        if captured {
-            event_loop.exit();
-        } else if capture::target().is_some() {
+        self.drag_tick();
+        if !captured
+            && let Some(gfx) = &self.gfx
+            && capture::target().is_some()
+        {
             gfx.window.request_redraw();
         }
+        if captured {
+            event_loop.exit();
+        }
+    }
+
+    /// Selección en marcha: al arrastrar fuera de la zona, se desplaza sola.
+    fn drag_tick(&mut self) {
+        // Con saltos largos (la ventana no se dibujaba) no se desplaza de golpe.
+        let dt = self.drag_at.replace(Instant::now()).map_or(0.0, |t| t.elapsed().as_secs_f32().min(0.05));
+        let (x, y) = self.cursor;
+        match self.drag.clone() {
+            Some(Drag::Chat(false)) => {
+                self.chat_drag_tick(dt);
+                if self.chats.current().is_some_and(|c| chat::outside(c.view, y) != 0.0) {
+                    self.redraw();
+                }
+            }
+            Some(Drag::Select(id)) => {
+                let Some(gfx) = &self.gfx else { return };
+                let (pad, cell) = (gfx.metrics.pad, gfx.metrics.cell_h);
+                let Some((_, a)) = self.pane_areas.iter().find(|(p, _)| *p == id).copied() else { return };
+                let inner = Area::new(a.x, a.y + pad, a.w, (a.h - 2.0 * pad).max(cell));
+                let over = chat::outside(inner, y);
+                if over == 0.0 {
+                    return;
+                }
+                self.scroll_accum -= (chat::scroll_speed(over, inner.h) * dt / cell) as f64;
+                let lines = self.scroll_accum.trunc();
+                self.scroll_accum -= lines;
+                if lines != 0.0 {
+                    if let Some(p) = self.panes.get(&id) {
+                        p.session.scroll(lines as i32);
+                    }
+                    self.extend_selection(id, x, y);
+                }
+                self.redraw();
+            }
+            _ => self.drag_at = None,
+        }
+    }
+
+    /// La selección de una terminal llega hasta un punto.
+    fn extend_selection(&self, id: PaneId, x: f32, y: f32) {
+        let (Some(gfx), Some(p)) = (&self.gfx, self.panes.get(&id)) else { return };
+        let Some((_, a)) = self.pane_areas.iter().find(|(p, _)| *p == id).copied() else { return };
+        let size = p.session.size();
+        let (row, col, right) = gfx.cell_at(a, x, y, size.rows as usize, size.cols as usize);
+        // Por encima se coge la línea entera desde su principio; por debajo, hasta el final.
+        let over = chat::outside(Area::new(a.x, a.y, a.w, a.h), y);
+        let (col, right) = match over {
+            o if o < 0.0 => (0, false),
+            o if o > 0.0 => (size.cols as usize, true),
+            _ => (col, right),
+        };
+        p.session.update_selection(row, col, right);
     }
 }
 

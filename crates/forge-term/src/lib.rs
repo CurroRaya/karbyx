@@ -422,6 +422,20 @@ impl Session {
         }
     }
 
+    /// Hay una selección empezada (aunque aún esté vacía).
+    pub fn has_selection(&self) -> bool {
+        self.term.lock().selection.is_some()
+    }
+
+    /// Selecciona todo: el historial y lo que se ve.
+    pub fn select_all(&self) {
+        let mut term = self.term.lock();
+        let (top, bottom, last) = (term.topmost_line(), term.bottommost_line(), term.last_column());
+        let mut sel = Selection::new(SelectionType::Simple, Point::new(top, Column(0)), Side::Left);
+        sel.update(Point::new(bottom, last), Side::Right);
+        term.selection = Some(sel);
+    }
+
     pub fn clear_selection(&self) {
         self.term.lock().selection = None;
     }

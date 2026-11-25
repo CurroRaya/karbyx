@@ -247,6 +247,12 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
   forge, ordenadas por fecha. Si lo cierras con una a medias, se para y puedes
   continuarla. Al reabrir, todas vuelven a preguntar antes de cambiar nada. La ×
   (dos clics) la borra.
+- **Copiar**: arrastra por la conversación; si sales por arriba o por abajo se
+  desplaza sola, y también puedes usar la rueda mientras arrastras. **⌘A** la
+  selecciona entera (con algo escrito, antes selecciona lo escrito). Para coger
+  desde un punto hasta otro lejano, haz clic en el primero, desplázate y pulsa
+  **⇧ clic** en el segundo; **⌘⇧↓** y **⌘⇧↑** van hasta el final o el principio.
+  Se copia lo que está desplegado.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
   Al llegar a tres cuartos, el modelo **resume** lo antiguo y sigue, conservando
   tal cual lo último y tu petición; el resumen se puede ver en la conversación.
@@ -454,6 +460,9 @@ y lo terminado se enfría a acero.
 | ⌘1…⌘9, ⌃Tab, ⌘⇧↑/↓ | Cambiar de pestaña |
 | ⌘F, ⌘G / ⌘⇧G | Buscar en el historial, siguiente / anterior (↵ y ⇧↵ dentro de la barra) |
 | ⌘C / ⌘V | Copiar la selección / pegar (con bracketed paste) |
+| ⌘A | Seleccionar toda la conversación o toda la terminal, con su historial |
+| ⇧ clic | Extender la selección hasta ahí |
+| ⌘⇧↑ / ⌘⇧↓ (tras un clic en la conversación) | Seleccionar hasta el principio / el final |
 | ⌘B / ⌘⌥B | Mostrar u ocultar la barra de sesiones / el panel de consumo (este aparece solo en pestañas con una sesión de IA; ⌘⌥B lo fuerza en la pestaña actual) |
 | ⌘+ / ⌘- / ⌘0 | Tamaño de fuente |
 | ⌘← / ⌘→, ⌥← / ⌥→, ⌘⌫ | Inicio / fin de línea, palabra anterior / siguiente, borrar línea |
@@ -468,7 +477,8 @@ y lo terminado se enfría a acero.
 | ⌘Q | Salir |
 
 **Ratón:** arrastrar selecciona, doble clic selecciona una palabra, triple
-clic la línea y ⌥+arrastrar un bloque rectangular. Los divisores entre
+clic la línea y ⌥+arrastrar un bloque rectangular. Al arrastrar más allá del
+borde, el historial se desplaza solo. Los divisores entre
 paneles se arrastran. Si la aplicación pide el ratón (vim, htop, tmux) los
 clics le llegan a ella; con ⇧ se fuerza la selección normal.
 
@@ -591,7 +601,7 @@ split_right = "cmd+d"
 find = "cmd+f"
 ```
 
-Acciones configurables: `copy`, `paste`, `quit`, `new_tab`, `new_ai`, `close`,
+Acciones configurables: `copy`, `paste`, `select_all`, `quit`, `new_tab`, `new_ai`, `close`,
 `next_tab`, `prev_tab`, `toggle_sidebar`, `toggle_usage`, `font_bigger`,
 `font_smaller`, `font_reset`, `clear`, `split_right`, `split_down`,
 `focus_left`, `focus_right`, `focus_up`, `focus_down`, `find`, `find_next`,

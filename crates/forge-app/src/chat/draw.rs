@@ -62,6 +62,15 @@ pub struct Placed {
 struct Piece {
     a: Area,
     what: What,
+    /// Lo que va delante al copiar: separación, viñeta...
+    lead: String,
+}
+
+/// Parte copiable de un elemento.
+pub struct Copied {
+    pub piece: usize,
+    pub lead: String,
+    pub text: String,
 }
 
 enum What {
@@ -99,6 +108,8 @@ enum What {
     Copy(ChatHit, &'static str),
     /// Icono de estado animado.
     Spin,
+    /// No se ve: es lo que se copia de algo que no se puede seleccionar.
+    Mark(String),
     /// Segundos desde un momento.
     Clock(std::time::Instant, &'static str),
     Hit(ChatHit),
@@ -120,6 +131,18 @@ pub struct Cached {
 }
 
 impl Cached {
+    /// Lo que se copia, en orden.
+    pub fn copied(&self) -> impl Iterator<Item = Copied> {
+        self.pieces.iter().enumerate().filter_map(|(piece, p)| {
+            let text = match &p.what {
+                What::Text { rich, select: true, .. } => rich.spans.iter().map(|s| s.text.as_str()).collect(),
+                What::Mark(t) => t.clone(),
+                _ => return None,
+            };
+            Some(Copied { piece, lead: p.lead.clone(), text })
+        })
+    }
+
     /// Textos seleccionables: (trozo, texto).
     pub fn texts(&self) -> impl Iterator<Item = (usize, String)> {
         self.pieces.iter().enumerate().filter_map(|(i, p)| match &p.what {
@@ -148,8 +171,15 @@ impl Build<'_> {
     }
 
     fn push(&mut self, a: Area, what: What) -> usize {
-        self.pieces.push(Piece { a, what });
+        self.pieces.push(Piece { a, what, lead: "\n".into() });
         self.pieces.len() - 1
+    }
+
+    /// Qué va delante del último trozo al copiarlo.
+    fn lead(&mut self, s: impl Into<String>) {
+        if let Some(p) = self.pieces.last_mut() {
+            p.lead = s.into();
+        }
     }
 
     fn rich(&self, spans: Vec<RichSpan>, pt: f32, lh: f32) -> Rich {
@@ -252,7 +282,13 @@ impl Build<'_> {
                 };
                 self.y += self.d(gap);
             }
+            let tight = prev_item && is_item;
             prev_item = is_item;
+            let from = self.pieces.len();
+            let item_lead = match &b {
+                Block::Item { depth, marker, .. } => format!("{}{marker} ", "  ".repeat(*depth)),
+                _ => String::new(),
+            };
             match b {
                 Block::Para(s) => {
                     let r = self.rich(s, 15.0, 1.58);
@@ -305,6 +341,12 @@ impl Build<'_> {
                 }
                 Block::Table(rows) => self.table(rows),
             }
+            // Entre bloques, una línea en blanco; en una lista, no.
+            if let Some(p) =
+                self.pieces[from..].iter_mut().find(|p| matches!(p.what, What::Text { select: true, .. }))
+            {
+                p.lead = format!("{}{item_lead}", if tight { "\n" } else { "\n\n" });
+            }
         }
     }
 
@@ -348,6 +390,7 @@ impl Build<'_> {
                 let rich = self.rich(c, 14.0, 1.5);
                 self.y = y + pad_y;
                 h = h.max(self.text(rich, x + pad_x, want[i] - 2.0 * pad_x, true));
+                self.lead(if i == 0 { "\n" } else { "\t" });
                 x += want[i];
             }
             self.y = y + h + 2.0 * pad_y;
@@ -368,6 +411,7 @@ impl Build<'_> {
     /// Cabecera de una herramienta: estado, verbo, objeto y resultado.
     fn tool_head(&mut self, i: usize, t: &ToolItem, x: f32, w: f32, foldable: bool) {
         let y = self.y;
+        self.push(Area::new(x, y, 0.0, 0.0), What::Mark(format!("{} {}", t.verb, t.target).trim().into()));
         let icon = Area::new(x, y + self.d(5.0), self.d(16.0), self.d(20.0));
         match &t.state {
             ToolState::Running | ToolState::Queued => {
@@ -450,6 +494,7 @@ impl Build<'_> {
             if let Some(Piece { what: What::Text { codes, .. }, .. }) = self.pieces.last_mut() {
                 codes.clear();
             }
+            self.lead(format!("\n{mark} "));
             self.pieces[bar].a.h = h;
             let m = self.rich(vec![mono(mark, bg.unwrap_or(FAINT))], 13.5, 1.45);
             self.push(
@@ -1008,7 +1053,7 @@ pub fn draw_chat(
 
     let head = ui.s(48.0);
     let view = Area::new(area.x, area.y + head, area.w, (top - ui.s(14.0) - area.y - head).max(1.0));
-    c.view_h = view.h;
+    c.view = view;
     c.placed.clear();
 
     if c.blank() {
@@ -1258,6 +1303,7 @@ fn paint(
                 }
             }
         }
+        What::Mark(_) => {}
         What::Label { text, pt, color, bold, align, mono } => {
             ui.text(text, a.x, a.y, a.w, *pt, *color, *bold, *align);
             if *mono && let Some(l) = ui.labels.last_mut() {
