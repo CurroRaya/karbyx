@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::web;
+use crate::{files, web};
 
 pub use crate::remote::LOGIN;
 
@@ -42,38 +42,37 @@ struct Store {
     grants: BTreeMap<String, Grant>,
     /// Lo que dijo cada servidor al negarse.
     challenges: BTreeMap<String, String>,
+    failed: Option<String>,
 }
 
 static STORE: Mutex<Store> =
-    Mutex::new(Store { path: None, grants: BTreeMap::new(), challenges: BTreeMap::new() });
+    Mutex::new(Store { path: None, grants: BTreeMap::new(), challenges: BTreeMap::new(), failed: None });
 
 fn store() -> std::sync::MutexGuard<'static, Store> {
     STORE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Dónde se guardan las claves. Se llama al arrancar.
-pub fn set_path(p: PathBuf) {
-    let text = std::fs::read_to_string(&p).unwrap_or_default();
+/// Dónde se guardan las claves. Se llama al arrancar. Si el archivo estaba
+/// dañado, se aparta: devuelve dónde ha quedado.
+pub fn set_path(p: PathBuf) -> Option<PathBuf> {
+    let (grants, broken) = files::load_json(&p);
     let mut s = store();
-    s.grants = serde_json::from_str(&text).unwrap_or_default();
-    s.path = Some(p);
+    (s.grants, s.path) = (grants, Some(p));
+    broken
+}
+
+/// Último fallo al guardar las sesiones, si nadie lo ha visto aún.
+pub fn take_save_error() -> Option<String> {
+    store().failed.take()
 }
 
 impl Store {
-    fn save(&self) {
-        use std::os::unix::fs::OpenOptionsExt;
+    fn save(&mut self) {
         let Some(p) = &self.path else { return };
-        let write = || -> std::io::Result<()> {
-            if let Some(d) = p.parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            let tmp = p.with_extension("tmp");
-            let _ = std::fs::remove_file(&tmp);
-            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
-            f.write_all(serde_json::to_string_pretty(&self.grants)?.as_bytes())?;
-            std::fs::rename(&tmp, p)
-        };
-        let _ = write();
+        let saved = serde_json::to_string_pretty(&self.grants)
+            .map_err(std::io::Error::other)
+            .and_then(|t| files::write_private(p, &t));
+        self.failed = saved.err().map(|e| e.to_string());
     }
 }
 

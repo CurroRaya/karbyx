@@ -21,8 +21,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets   # sin avisos
-   cargo test --workspace
+   scripts/check.sh   # formato, clippy sin avisos y todos los tests
    ```
 
 3. Si tocas la interfaz, adjunta una captura. Puedes generarla sin permisos
@@ -40,6 +39,9 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
   // Copyright (C) 2026 Francisco José Raya García (Curro) y los colaboradores de forge
   ```
 
+- Un test que necesite puertos, Python o crear un sandbox empieza con
+  `if skip(&[Needs::…])`: donde no se pueda, se salta y lo dice. `check.sh` no
+  deja saltarse ninguno.
 - Los cambios de comportamiento llevan tests; si algo no se puede testear
   automáticamente, explica en el PR cómo lo has probado.
 

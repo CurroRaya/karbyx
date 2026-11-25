@@ -734,6 +734,7 @@ fn system_prompt(ctx: Option<&Ctx>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
     use std::io::{Read, Write};
     use std::sync::Mutex;
 
@@ -825,6 +826,9 @@ mod tests {
 
     #[test]
     fn edits_with_permission() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("editar");
         let (server, got) = serve(vec![
             tool("read", serde_json::json!({"path": "a.txt"})),
@@ -845,6 +849,9 @@ mod tests {
 
     #[test]
     fn denied_with_reason_goes_on_and_without_stops() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("negar");
         let edit = || tool("edit", serde_json::json!({"path": "a.txt", "old": "uno", "new": "dos"}));
         let (server, got) = serve(vec![edit(), say("Vale."), edit()]);
@@ -861,6 +868,9 @@ mod tests {
 
     #[test]
     fn auto_still_asks_for_the_dangerous() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("auto");
         let (server, _) = serve(vec![
             tool("write", serde_json::json!({"path": "b.txt", "content": "x"})),
@@ -878,6 +888,9 @@ mod tests {
 
     #[test]
     fn full_asks_nothing() {
+        if skip(&[Needs::Exec, Needs::Ports]) {
+            return;
+        }
         let dir = project("total");
         let out = dir.with_extension("fuera");
         let _ = std::fs::remove_file(&out);
@@ -903,6 +916,9 @@ mod tests {
 
     #[test]
     fn stops_while_waiting_for_the_model() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("parar");
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = Server { name: "".into(), url: l.local_addr().unwrap().to_string(), key: None };
@@ -937,7 +953,7 @@ mod tests {
 
     #[test]
     fn uses_mcp_servers() {
-        if !mcp::tests::available() {
+        if skip(&[Needs::Ports, Needs::Python]) {
             return;
         }
         let dir = project("mcp");
@@ -989,6 +1005,9 @@ mod tests {
 
     #[test]
     fn long_conversations_are_summarized() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("resumir");
         std::fs::write(dir.join("a.txt"), format!("{}\n", "palabra ".repeat(10)).repeat(40)).unwrap();
         let read = |n: usize| tool("read", serde_json::json!({"path": "a.txt", "limit": 100 + n}));
@@ -1018,6 +1037,9 @@ mod tests {
 
     #[test]
     fn without_summary_it_trims() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("recortar");
         std::fs::write(dir.join("a.txt"), format!("{}\n", "palabra ".repeat(10)).repeat(40)).unwrap();
         let read = |n: usize| tool("read", serde_json::json!({"path": "a.txt", "limit": 100 + n}));
@@ -1036,6 +1058,9 @@ mod tests {
 
     #[test]
     fn history_is_handed_over_and_resumed() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("seguir");
         let (server, got) =
             serve(vec![tool("read", serde_json::json!({"path": "a.txt"})), say("Uno."), say("Dos.")]);
@@ -1066,6 +1091,9 @@ mod tests {
 
     #[test]
     fn repeated_calls_are_cut() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let dir = project("bucle");
         let read = || tool("read", serde_json::json!({"path": "a.txt"}));
         let (server, got) = serve(vec![read(), read(), read(), read(), say("Fin")]);

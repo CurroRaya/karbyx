@@ -11,6 +11,8 @@ use chrono::{DateTime, Duration, Local, Utc};
 
 use crate::rects::{Rect, linear};
 use forge_ai::Provider;
+pub use forge_ai::format::tok;
+use forge_ai::format::{dur, hm};
 
 use crate::agents::AgentState;
 
@@ -333,25 +335,6 @@ pub fn hit_at(hits: &[(Area, Hit)], x: f32, y: f32) -> Option<Hit> {
 }
 
 // ---------- formato ----------
-
-pub fn tok(n: u64) -> String {
-    match n {
-        n if n >= 1_000_000_000 => format!("{:.2}B", n as f64 / 1e9),
-        n if n >= 10_000_000 => format!("{:.0}M", n as f64 / 1e6),
-        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
-        n if n >= 1_000 => format!("{:.0}k", n as f64 / 1e3),
-        n => n.to_string(),
-    }
-}
-
-fn dur(d: Duration) -> String {
-    let m = d.num_minutes().max(0);
-    if m >= 60 { format!("{}h {:02}m", m / 60, m % 60) } else { format!("{m} min") }
-}
-
-fn hm(t: DateTime<Utc>) -> String {
-    t.with_timezone(&Local).format("%H:%M").to_string()
-}
 
 /// "lun 16": día de la semana en español (chrono solo trae nombres en inglés).
 fn dia(t: DateTime<Utc>) -> String {

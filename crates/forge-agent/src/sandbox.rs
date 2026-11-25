@@ -182,11 +182,12 @@ pub fn command(program: &str, dirs: &Dirs, network: bool) -> Result<Command, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     /// Ejecuta `script` aislado en una carpeta nueva. (carpeta, salió bien)
     fn sh(name: &str, script: &str) -> Option<(PathBuf, bool)> {
         // Dentro de otro sandbox no se puede crear uno.
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Sandbox, Needs::Ports]) {
             return None;
         }
         let root = std::env::temp_dir().join(format!("forge-sb-{name}-{}", std::process::id()));
@@ -250,7 +251,7 @@ mod tests {
 
     #[test]
     fn only_its_own_terminals() {
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Sandbox, Needs::Ports]) {
             return;
         }
         // Una terminal propia, sí (`script` abre una).
@@ -275,7 +276,7 @@ mod tests {
 
     #[test]
     fn blocks_network_and_sockets() {
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Sandbox, Needs::Ports]) {
             return;
         }
         // Servidores que sí escuchan: fuera del sandbox se conecta, dentro no.

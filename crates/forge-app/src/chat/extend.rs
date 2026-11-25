@@ -201,7 +201,7 @@ fn load_mcp() -> Result<Vec<(String, Config)>, String> {
 fn save_mcp(list: &[McpView]) -> std::io::Result<()> {
     let map: BTreeMap<&str, &Config> = list.iter().map(|v| (v.name.as_str(), &v.config)).collect();
     let text = serde_json::to_string_pretty(&json!({"mcpServers": map}))?;
-    store::write_private(&mcp_path(), &format!("{text}\n"))
+    forge_agent::files::write_private(&mcp_path(), &format!("{text}\n"))
 }
 
 /// Servidores listos para una conversación: los que el usuario aprobó tal

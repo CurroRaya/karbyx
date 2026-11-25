@@ -9,6 +9,7 @@ pub mod api;
 pub mod catalog;
 mod compact;
 pub mod exec;
+pub mod files;
 pub mod http;
 pub mod install;
 pub mod know;
@@ -17,5 +18,7 @@ pub mod oauth;
 pub mod registry;
 mod remote;
 pub mod sandbox;
+#[doc(hidden)]
+pub mod testing;
 pub mod tools;
 pub mod web;

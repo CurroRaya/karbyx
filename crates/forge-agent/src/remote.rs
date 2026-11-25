@@ -285,6 +285,7 @@ fn answer(m: &Value, id: u64) -> Option<Result<Value, String>> {
 mod tests {
     use super::*;
     use crate::mcp::{Client, Config};
+    use crate::testing::{Needs, skip};
     use std::process::{Child, Command, Stdio};
 
     /// Servidor MCP remoto con inicio de sesión, streaming y sesiones que caducan.
@@ -370,7 +371,7 @@ print(srv.server_address[1], flush=True); srv.serve_forever()
     }
 
     fn serve(mode: &str) -> Option<Server> {
-        if !crate::mcp::tests::available() {
+        if skip(&[Needs::Ports, Needs::Python]) {
             return None;
         }
         let mut c = Command::new("/usr/bin/python3")

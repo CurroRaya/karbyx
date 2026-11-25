@@ -237,6 +237,7 @@ pub fn run(spec: &Spec, cancelled: &dyn Fn() -> bool, on: &mut dyn FnMut(&str)) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     fn spec<'a>(cmd: &'a str, dir: &'a Path, secs: u64) -> Spec<'a> {
         Spec {
@@ -252,6 +253,9 @@ mod tests {
 
     #[test]
     fn captures_output_and_exit_code() {
+        if skip(&[Needs::Exec]) {
+            return;
+        }
         let dir = std::env::temp_dir();
         let mut live = String::new();
         let out =
@@ -264,6 +268,9 @@ mod tests {
 
     #[test]
     fn background_processes_and_timeouts_do_not_hang() {
+        if skip(&[Needs::Exec]) {
+            return;
+        }
         let dir = std::env::temp_dir();
         let t = Instant::now();
         let out = run(&spec("sleep 60 & echo ya", &dir, 30), &|| false, &mut |_| {}).unwrap();

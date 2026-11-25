@@ -356,6 +356,7 @@ pub fn write_claude_settings(exe: &Path) -> Option<(PathBuf, PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use forge_agent::testing::{Needs, skip};
     use serde_json::json;
 
     #[test]
@@ -441,7 +442,7 @@ mod tests {
     #[test]
     fn socket_roundtrip() {
         // El sandbox de la verificación no deja crear el socket de forge.
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Exec]) {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();

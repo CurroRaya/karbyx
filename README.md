@@ -199,6 +199,7 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | Un MCP remoto no deja iniciar sesión | No admite otros programas: crea una clave en su web y pégala en *Clave*. El transporte antiguo (SSE) no está soportado. |
 | Con MCP, el contexto se llena enseguida | Sus herramientas ocupan sitio: apaga las que no uses o actívalo solo en el proyecto que lo necesita. |
 | No encuentra una habilidad o un servidor | Los catálogos no los tienen todos: pega la dirección de GitHub, la carpeta o su JSON. |
+| «Un archivo de forge estaba dañado» al abrir | Se ha apartado con `.roto` al final, en `~/Library/Application Support/forge`, y forge sigue con uno nuevo. Si era `chat.json`, vuelve a conectar tu PC; si era `chat.sesiones`, inicia sesión otra vez en tus MCP. |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
 | `command not found: forge-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
@@ -634,8 +635,8 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ## Desarrollo
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets
+scripts/check.sh               # formato, clippy y tests: lo que tiene que pasar antes de subir un cambio
+cargo test --workspace         # dentro del sandbox, lo que ahí no se puede probar se salta y lo dice (SALTADO)
 cargo test -p forge-agent live -- --ignored     # contra el registro MCP y skills.sh de verdad (necesita red)
 cargo run --release -p forge-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
 FORGE_SCREENSHOT=/tmp/forge.png cargo run --release -p forge-app   # vuelca un frame a PNG

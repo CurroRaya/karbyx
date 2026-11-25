@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{Local, Utc};
 use clap::{Parser, Subcommand};
+use forge_ai::format::{dur, hm, tok};
 use forge_ai::{Bucket, LimitStatus, Provider, Scanner, Summary, UsageConfig, summarize};
 use owo_colors::OwoColorize;
 
@@ -134,26 +135,8 @@ fn main() -> Result<()> {
 
 // ---------- formato ----------
 
-fn tok(n: u64) -> String {
-    match n {
-        n if n >= 1_000_000_000 => format!("{:.2}B", n as f64 / 1e9),
-        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
-        n if n >= 1_000 => format!("{:.1}k", n as f64 / 1e3),
-        n => n.to_string(),
-    }
-}
-
 fn usd(b: &Bucket) -> String {
     format!("${:.2}{}", b.cost_usd, if b.has_unpriced { "*" } else { "" })
-}
-
-fn dur(d: Duration) -> String {
-    let m = d.num_minutes().max(0);
-    if m >= 60 { format!("{}h {:02}m", m / 60, m % 60) } else { format!("{m}m") }
-}
-
-fn local(t: DateTime<Utc>) -> String {
-    t.with_timezone(&Local).format("%H:%M").to_string()
 }
 
 fn bar(pct: f64, width: usize) -> String {
@@ -188,8 +171,7 @@ fn print_limit(label: &str, l: &LimitStatus) {
         Some(t) => println!(
             "  {:<10} {}",
             "",
-            format!("⚠ al ritmo actual se agota a las {} (reinicio {})", local(t), local(l.resets_at))
-                .yellow()
+            format!("⚠ al ritmo actual se agota a las {} (reinicio {})", hm(t), hm(l.resets_at)).yellow()
         ),
         None => println!(
             "  {:<10} {}",
@@ -208,8 +190,8 @@ fn print_summary(p: Provider, s: &Summary) {
             println!(
                 "{}  {}–{}  ·  quedan {}",
                 "Ventana actual".bold(),
-                local(b.start),
-                local(b.end),
+                hm(b.start),
+                hm(b.end),
                 dur(a.remaining).cyan()
             );
             println!(
@@ -286,7 +268,7 @@ fn print_blocks(title: &str, s: &Summary, last: usize) {
             "  {} {}–{}  {:>9} frescos  {:>10}  {:>5} pet.  {}",
             if active { "●".green().to_string() } else { "○".dimmed().to_string() },
             b.start.with_timezone(&Local).format("%a %d %H:%M"),
-            local(b.end),
+            hm(b.end),
             tok(b.usage.tokens.billable_weighted()),
             usd(&b.usage),
             b.usage.requests,

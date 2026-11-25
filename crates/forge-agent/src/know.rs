@@ -5,17 +5,17 @@
 //! usuario aprueba) y las habilidades (procedimientos en un `SKILL.md`).
 //!
 //! Todo lo que se guarda aquí influye en conversaciones futuras, así que el
-//! modelo nunca escribe sin que el usuario lo vea y lo acepte, tampoco en modo
-//! automático; y en las tareas que trabajan solas ni siquiera puede pedirlo.
+//! modelo no escribe sin que el usuario lo vea y lo acepte, tampoco en modo
+//! automático (sí en total); y en las tareas que trabajan solas ni siquiera
+//! puede pedirlo.
 
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
 use crate::api::Call;
+use crate::files::write;
 use crate::tools::{Action, Detail, DiffLine, LineKind, Need, Outcome, diff};
 
 /// Caracteres máximos de una nota, y notas por archivo.
@@ -403,18 +403,6 @@ fn edit_notes(file: &Path, f: impl FnOnce(&mut Vec<String>)) -> std::io::Result<
     write(file, &out, 0o700, 0o600)
 }
 
-/// Escribe de una vez, con los permisos indicados.
-fn write(file: &Path, text: &str, dir_mode: u32, mode: u32) -> std::io::Result<()> {
-    if let Some(d) = file.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(dir_mode).create(d)?;
-    }
-    let tmp = file.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(&tmp)?;
-    f.set_permissions(std::fs::Permissions::from_mode(mode))?;
-    f.write_all(text.as_bytes())?;
-    std::fs::rename(&tmp, file)
-}
-
 fn short(s: &str, max: usize) -> String {
     if s.chars().count() <= max { s.to_string() } else { s.chars().take(max - 1).chain(['…']).collect() }
 }
@@ -558,6 +546,7 @@ fn builtin() -> Vec<Skill> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     struct Tmp(PathBuf);
     impl Drop for Tmp {

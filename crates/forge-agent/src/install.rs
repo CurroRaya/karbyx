@@ -384,6 +384,7 @@ impl Found {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     struct Tmp(PathBuf);
     impl Drop for Tmp {
@@ -466,7 +467,7 @@ mod tests {
 
     #[test]
     fn unpacks_safely() {
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Python]) {
             return;
         }
         let t = tmp("tar");

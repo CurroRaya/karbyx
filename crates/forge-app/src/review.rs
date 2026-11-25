@@ -71,6 +71,62 @@ impl Review {
         }
     }
 
+    /// Diff nuevo: conserva el archivo elegido aunque cambie la lista.
+    fn loaded(&mut self, files: Result<Vec<FileDiff>, String>, target: String) {
+        self.loading = false;
+        let chosen = match &self.files {
+            Some(Ok(f)) => f.get(self.sel).map(|f| f.path.clone()),
+            _ => None,
+        };
+        if let Ok(new) = &files {
+            let idx = chosen.and_then(|c| new.iter().position(|f| f.path == c));
+            if idx != Some(self.sel) {
+                self.scroll = 0;
+            }
+            self.sel = idx.unwrap_or(0).min(new.len().saturating_sub(1));
+        }
+        self.files = Some(files);
+        self.target = target;
+        self.scroll = self.scroll.min(self.max_scroll());
+    }
+
+    /// Empieza a fusionar, si se puede.
+    fn start_merge(&mut self) -> Option<Worktree> {
+        let wt = self.worktree.clone().filter(|_| !self.busy)?;
+        self.busy = true;
+        self.confirm_discard = false;
+        self.message = Some((format!("Fusionando {} en {}…", wt.name(), self.target), false));
+        Some(wt)
+    }
+
+    /// Empieza a borrar, si se puede. La primera vez solo pide confirmación.
+    fn start_discard(&mut self) -> Option<Worktree> {
+        let wt = self.worktree.clone().filter(|_| !self.busy)?;
+        if !self.confirm_discard {
+            self.confirm_discard = true;
+            return None;
+        }
+        self.confirm_discard = false;
+        self.busy = true;
+        self.message = Some((format!("Borrando {}…", wt.name()), false));
+        Some(wt)
+    }
+
+    /// Fin de la fusión.
+    fn merged(&mut self, result: Result<(String, Option<String>), String>) {
+        self.busy = false;
+        match result {
+            Ok((msg, head)) => {
+                if let (Some(h), Some(w)) = (head, &mut self.worktree) {
+                    w.base = h.clone();
+                    self.base = h;
+                }
+                self.message = Some((format!("{msg}. ⌫ cierra el agente y borra su worktree."), false));
+            }
+            Err(e) => self.message = Some((e, true)),
+        }
+    }
+
     fn scroll_by(&mut self, delta: isize) {
         let s = self.scroll as isize + delta;
         self.scroll = (s.max(0) as usize).min(self.max_scroll());
@@ -155,23 +211,9 @@ impl App {
         let current = self.review.as_ref().map(|r| r.pane);
         match ev {
             ReviewEvent::Loaded { pane, files, target } if current == Some(pane) => {
-                let Some(r) = &mut self.review else { return };
-                r.loading = false;
-                // Conserva el archivo elegido aunque cambie la lista.
-                let chosen = match &r.files {
-                    Some(Ok(f)) => f.get(r.sel).map(|f| f.path.clone()),
-                    _ => None,
-                };
-                if let Ok(new) = &files {
-                    let idx = chosen.and_then(|c| new.iter().position(|f| f.path == c));
-                    if idx != Some(r.sel) {
-                        r.scroll = 0;
-                    }
-                    r.sel = idx.unwrap_or(0).min(new.len().saturating_sub(1));
+                if let Some(r) = &mut self.review {
+                    r.loaded(files, target);
                 }
-                r.files = Some(files);
-                r.target = target;
-                r.scroll = r.scroll.min(r.max_scroll());
             }
             ReviewEvent::Loaded { .. } => {}
             ReviewEvent::Merged { pane, result } => {
@@ -184,18 +226,7 @@ impl App {
                     self.log_done(done.0, done.1, true);
                 }
                 if let Some(r) = self.review.as_mut().filter(|r| r.pane == pane) {
-                    r.busy = false;
-                    match result {
-                        Ok((msg, head)) => {
-                            if let (Some(h), Some(w)) = (head, &mut r.worktree) {
-                                w.base = h.clone();
-                                r.base = h;
-                            }
-                            r.message =
-                                Some((format!("{msg}. ⌫ cierra el agente y borra su worktree."), false));
-                        }
-                        Err(e) => r.message = Some((e, true)),
-                    }
+                    r.merged(result);
                     self.refresh_review();
                 }
             }
@@ -229,13 +260,7 @@ impl App {
         let task = self.review.as_ref().and_then(|r| self.title_of(r.pane));
         let proxy = self.proxy.clone();
         let Some(r) = &mut self.review else { return };
-        let Some(wt) = r.worktree.clone() else { return };
-        if r.busy {
-            return;
-        }
-        r.busy = true;
-        r.confirm_discard = false;
-        r.message = Some((format!("Fusionando {} en {}…", wt.name(), r.target), false));
+        let Some(wt) = r.start_merge() else { return };
         let pane = r.pane;
         let message = task.unwrap_or_else(|| format!("trabajo de {}", wt.name()));
         std::thread::spawn(move || {
@@ -248,17 +273,7 @@ impl App {
     /// borra su worktree y su rama.
     fn review_discard(&mut self, event_loop: &ActiveEventLoop) {
         let Some(r) = &mut self.review else { return };
-        let Some(wt) = r.worktree.clone() else { return };
-        if r.busy {
-            return;
-        }
-        if !r.confirm_discard {
-            r.confirm_discard = true;
-            return;
-        }
-        r.confirm_discard = false;
-        r.busy = true;
-        r.message = Some((format!("Borrando {}…", wt.name()), false));
+        let Some(wt) = r.start_discard() else { return };
         let pane = r.pane;
         let done = self.done_entry(pane);
         if let Some(r) = &mut self.review {
@@ -370,5 +385,96 @@ impl App {
             _ => {}
         }
         self.redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn review() -> Review {
+        Review {
+            pane: 1,
+            dir: None,
+            base: "viejo".into(),
+            worktree: Some(Worktree {
+                path: "/w/agente-1".into(),
+                repo: "/w".into(),
+                branch: "forge/agente-1".into(),
+                base: "viejo".into(),
+            }),
+            project: "p".into(),
+            target: "main".into(),
+            files: None,
+            sel: 0,
+            scroll: 0,
+            rows: 10,
+            confirm_discard: false,
+            message: None,
+            busy: false,
+            loading: true,
+            refreshed: Instant::now(),
+            discarded: None,
+        }
+    }
+
+    fn file(path: &str, lines: usize) -> FileDiff {
+        let l =
+            worktree::DiffLine { kind: worktree::LineKind::Context, old: None, new: None, text: "".into() };
+        FileDiff { path: path.into(), status: 'M', added: 0, removed: 0, lines: vec![l; lines] }
+    }
+
+    #[test]
+    fn discarding_needs_two_presses_and_nothing_running() {
+        let mut r = review();
+        assert!(r.start_discard().is_none() && r.confirm_discard && !r.busy, "la primera solo pregunta");
+        assert!(r.start_discard().is_some() && r.busy && !r.confirm_discard);
+        assert!(r.start_discard().is_none() && r.start_merge().is_none(), "ya hay algo en marcha");
+        // Ni siquiera se pregunta mientras se fusiona.
+        let mut r = review();
+        assert!(r.start_merge().is_some());
+        assert!(r.start_discard().is_none() && !r.confirm_discard);
+        // Fusionar olvida una confirmación a medias.
+        let mut r = review();
+        r.start_discard();
+        assert!(r.start_merge().is_some() && !r.confirm_discard);
+        // Una terminal cualquiera no tiene nada que fusionar ni borrar.
+        let mut r = review();
+        r.worktree = None;
+        assert!(r.start_merge().is_none() && r.start_discard().is_none() && !r.busy && !r.confirm_discard);
+    }
+
+    #[test]
+    fn after_merging_the_diff_starts_again() {
+        let mut r = review();
+        r.start_merge();
+        r.merged(Err("conflictos en a.rs".into()));
+        assert_eq!(r.message, Some(("conflictos en a.rs".into(), true)));
+        assert!(!r.busy && r.base == "viejo", "con conflictos no cambia nada");
+        r.start_merge();
+        r.merged(Ok(("Fusionado".into(), Some("nuevo".into()))));
+        assert!(!r.busy && r.base == "nuevo" && r.worktree.as_ref().unwrap().base == "nuevo");
+        assert!(r.message.as_ref().is_some_and(|(_, error)| !error));
+    }
+
+    #[test]
+    fn keeps_the_chosen_file() {
+        let mut r = review();
+        r.loaded(Ok(vec![file("a", 5), file("b", 50)]), "main".into());
+        (r.sel, r.scroll) = (1, 40);
+        // Aparece otro delante: se sigue viendo el mismo.
+        r.loaded(Ok(vec![file("0", 5), file("a", 5), file("b", 50)]), "main".into());
+        assert_eq!(r.sel, 2);
+        // En el mismo sitio y más corto: no se queda pasado del final.
+        r.scroll = 40;
+        r.loaded(Ok(vec![file("0", 5), file("a", 5), file("b", 12)]), "main".into());
+        assert_eq!((r.sel, r.scroll), (2, 2));
+        // Ya no está, o no se pudo leer.
+        r.loaded(Ok(vec![file("a", 5)]), "main".into());
+        assert_eq!((r.sel, r.scroll), (0, 0));
+        r.loaded(Err("git".into()), "main".into());
+        assert_eq!((r.file_count(), r.max_scroll(), r.loading), (0, 0, false));
+        r.scroll_by(5);
+        assert_eq!(r.scroll, 0);
     }
 }

@@ -11,6 +11,7 @@
 mod claude;
 mod codex;
 pub mod config;
+pub mod format;
 mod gemini;
 pub mod pricing;
 pub mod provider;

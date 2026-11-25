@@ -9,11 +9,11 @@
 //! leer el resto) y el contenido.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use forge_agent::api::{Msg, Server, Stats};
+use forge_agent::files;
 use forge_agent::tools::Detail;
 use serde::{Deserialize, Serialize};
 
@@ -42,14 +42,14 @@ fn path() -> Option<PathBuf> {
 }
 
 impl Saved {
-    pub fn load() -> Self {
-        let text = path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-        serde_json::from_str(&text).unwrap_or_default()
+    /// Lo guardado y, si estaba dañado, dónde se ha apartado.
+    pub fn load() -> (Self, Option<PathBuf>) {
+        path().map(|p| files::load_json(&p)).unwrap_or_default()
     }
 
     pub fn save(&self) {
         let Some(p) = path() else { return };
-        if let Err(e) = write_private(&p, &serde_json::to_string_pretty(self).unwrap_or_default()) {
+        if let Err(e) = files::write_private(&p, &serde_json::to_string_pretty(self).unwrap_or_default()) {
             log::warn!("no se pudo guardar {}: {e}", p.display());
         }
     }
@@ -161,34 +161,13 @@ pub fn load(p: &Path) -> Result<Stored, String> {
 }
 
 pub fn store(p: &Path, meta: &Meta, body: &Stored) -> std::io::Result<()> {
-    write_private(p, &format!("{}\n{}\n", serde_json::to_string(meta)?, serde_json::to_string(body)?))
-}
-
-/// Escribe de una vez (archivo nuevo y cambio de nombre), solo para el usuario.
-pub fn write_private(p: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(d) = p.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)?;
-    }
-    let tmp = p.with_extension("tmp");
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    f.write_all(text.as_bytes())?;
-    std::fs::rename(&tmp, p)
+    files::write_private(p, &format!("{}\n{}\n", serde_json::to_string(meta)?, serde_json::to_string(body)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn private_and_atomic() {
-        let p = std::env::temp_dir().join(format!("forge-store-{}.json", std::process::id()));
-        write_private(&p, "{}").unwrap();
-        write_private(&p, "{\"servers\":[]}").unwrap();
-        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"servers\":[]}");
-        let _ = std::fs::remove_file(p);
-    }
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn conversations() {

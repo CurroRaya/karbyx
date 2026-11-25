@@ -815,6 +815,7 @@ fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     struct Tmp(PathBuf);
     impl Drop for Tmp {
@@ -915,7 +916,7 @@ mod tests {
 
     #[test]
     fn commands_run_sandboxed() {
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Sandbox]) {
             return;
         }
         let (t, ctx) = setup("orden");

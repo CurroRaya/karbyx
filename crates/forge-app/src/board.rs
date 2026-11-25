@@ -1465,7 +1465,6 @@ fn chat_card_h(c: &ChatCard) -> f32 {
 }
 
 /// Tarjeta de una conversación con un modelo local.
-#[allow(clippy::too_many_arguments)]
 fn draw_chat_card(
     ui: &mut Ui,
     a: Area,

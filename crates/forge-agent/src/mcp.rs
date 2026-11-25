@@ -793,6 +793,7 @@ pub(crate) fn run(j: &Job, max: usize, cancelled: &dyn Fn() -> bool) -> Outcome 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     /// Servidor de prueba: imprime ruido, pagina y contesta.
     pub const SERVER: &str = r#"
@@ -834,19 +835,13 @@ for line in sys.stdin:
         Server { name: "prueba".into(), config: config(), off: BTreeSet::new(), trusted: BTreeSet::new() }
     }
 
-    /// Sin Python (o dentro del sandbox) no hay con qué probar.
-    pub fn available() -> bool {
-        std::env::var_os("FORGE_VERIFY").is_none()
-            && Command::new("/usr/bin/python3").arg("--version").output().is_ok_and(|o| o.status.success())
-    }
-
     fn call(name: &str, args: Value) -> Call {
         Call { id: "1".into(), name: name.into(), args: args.to_string() }
     }
 
     #[test]
     fn talks_to_a_server() {
-        if !available() {
+        if skip(&[Needs::Python]) {
             return;
         }
         let dir = std::env::temp_dir().canonicalize().unwrap();
@@ -888,7 +883,7 @@ for line in sys.stdin:
 
     #[test]
     fn a_dead_server_says_why() {
-        if !available() {
+        if skip(&[Needs::Python]) {
             return;
         }
         let dir = std::env::temp_dir();

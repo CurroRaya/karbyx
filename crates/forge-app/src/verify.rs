@@ -359,6 +359,7 @@ impl Verify {
 mod tests {
     use super::*;
     use forge_agent::exec::{strip_ansi, target_dir};
+    use forge_agent::testing::{Needs, skip};
     use std::process::Command;
 
     #[test]
@@ -460,7 +461,7 @@ mod tests {
     #[test]
     fn runs_sandboxed_and_cancels() {
         // Dentro de otro sandbox no se puede crear uno.
-        if std::env::var_os("FORGE_VERIFY").is_some() {
+        if skip(&[Needs::Sandbox]) {
             return;
         }
         let (dir, mut job) = repo("run", "echo dentro; echo x > ../forge-vjob-fuera-$$$$");

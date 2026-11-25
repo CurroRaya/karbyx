@@ -709,13 +709,18 @@ pub struct Chats {
 
 impl Chats {
     pub fn new() -> Self {
-        let saved = Saved::load();
+        let (saved, broken) = Saved::load();
         let servers = saved
             .servers
             .iter()
             .map(|s| ServerView { server: s.clone(), status: Status::Checking, checked: Instant::now() })
             .collect();
-        forge_agent::oauth::set_path(store::sessions_path());
+        let broken = broken.or(forge_agent::oauth::set_path(store::sessions_path()));
+        let toast = broken.map(|p| {
+            log::warn!("archivo dañado, apartado en {}", p.display());
+            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            (format!("Un archivo de forge estaba dañado. Lo he guardado como {name}."), Instant::now())
+        });
         let mut stored = store::list();
         stored.sort_by_key(|(_, m)| m.updated);
         let list: Vec<Chat> = stored
@@ -741,7 +746,7 @@ impl Chats {
             saved,
             popup: Popup::None,
             confirm: None,
-            toast: None,
+            toast,
             side_scroll: 0.0,
             side_max: 0.0,
             side_area: Area::default(),
@@ -1034,7 +1039,12 @@ impl App {
 
     /// En cada latido: avisos que caducan y servidores caídos que se reintentan.
     pub(super) fn tick_chat(&mut self) {
-        if self.chats.toast.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(1800)) {
+        if let Some(e) = forge_agent::oauth::take_save_error() {
+            self.toast(format!("Las sesiones MCP no se han podido guardar: {e}"));
+        }
+        // Lo largo se ve más tiempo.
+        let long = |t: &str| Duration::from_millis(1800.max(70 * t.chars().count() as u64));
+        if self.chats.toast.as_ref().is_some_and(|(t, at)| at.elapsed() > long(t)) {
             self.chats.toast = None;
         }
         let retry = |s: &ServerView| {

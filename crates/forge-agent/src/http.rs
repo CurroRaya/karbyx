@@ -363,6 +363,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{Needs, skip};
 
     #[test]
     fn addresses() {
@@ -407,6 +408,9 @@ mod tests {
 
     #[test]
     fn framings() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let b = serve(&[
             b"HTTP/1.1 200 OK\r\nTransfer-Enc",
             b"oding: chunked\r\n\r\n4\r",
@@ -427,6 +431,9 @@ mod tests {
 
     #[test]
     fn cancel_while_waiting() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = Base { host: "127.0.0.1".into(), port: l.local_addr().unwrap().port(), prefix: "".into() };
         let t = Instant::now();
