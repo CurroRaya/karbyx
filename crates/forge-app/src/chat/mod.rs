@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use forge_agent::agent::{Agent, Ask, Decision, Event, Setup};
+use forge_agent::agent::{Agent, Ask, Decision, Event, Mode, Setup};
 use forge_agent::api::{self, Model, Msg, Server, Stats};
 use forge_agent::http::Base;
 use forge_agent::know::{Know, Scope, Skill};
@@ -44,7 +44,11 @@ pub enum ChatHit {
     Delete(u64),
     Send,
     Stop,
+    /// Menú de permisos.
+    ModeMenu,
+    /// Alterna entre preguntar y automático (⇧⇥).
     Mode,
+    PickMode(Mode),
     ModelMenu,
     ProjectMenu,
     /// (servidor, modelo)
@@ -291,8 +295,8 @@ impl Chat {
         })
     }
 
-    pub fn auto(&self) -> bool {
-        self.agent.as_ref().is_some_and(Agent::auto)
+    pub fn mode(&self) -> Mode {
+        self.agent.as_ref().map_or(Mode::Ask, Agent::mode)
     }
 
     /// Memoria y habilidades de esta conversación.
@@ -612,6 +616,8 @@ pub enum Popup {
     None,
     Models,
     Projects,
+    /// Permisos. Con un momento: se pulsó *Total* entonces y falta confirmarlo.
+    Modes(Option<Instant>),
     Memory(Box<MemoryView>),
     Mcp(Box<McpPanel>),
     McpForm(Box<McpForm>),
@@ -1128,7 +1134,7 @@ impl App {
         let i = self.chats.list.len() - 1;
         self.start_agent(i);
         if let Some(a) = &self.chats.list[i].agent {
-            a.set_auto(copy);
+            a.set_mode(if copy { Mode::Auto } else { Mode::Ask });
         }
         self.send_to(i, task);
         self.save_chat(i);
@@ -1464,8 +1470,37 @@ impl App {
             ChatHit::Stop => self.chat_stop(),
             ChatHit::Mode => {
                 if let Some(a) = self.chats.current().and_then(|c| c.agent.as_ref()) {
-                    a.set_auto(!a.auto());
+                    // A *Total* solo se llega desde el menú.
+                    a.set_mode(if a.mode() == Mode::Ask { Mode::Auto } else { Mode::Ask });
                 }
+                if matches!(self.chats.popup, Popup::Modes(_)) {
+                    self.chats.popup = Popup::None;
+                }
+            }
+            ChatHit::ModeMenu => {
+                self.chats.popup = match self.chats.popup {
+                    Popup::Modes(_) => Popup::None,
+                    _ => Popup::Modes(None),
+                };
+            }
+            ChatHit::PickMode(m) => {
+                if let Some(a) = self.chats.current().and_then(|c| c.agent.as_ref()) {
+                    if m == Mode::Full && a.mode() != Mode::Full {
+                        match self.chats.popup {
+                            // Un doble clic no es confirmar.
+                            Popup::Modes(Some(t)) if t.elapsed() < Duration::from_millis(700) => {
+                                return self.redraw();
+                            }
+                            Popup::Modes(Some(_)) => {}
+                            _ => {
+                                self.chats.popup = Popup::Modes(Some(Instant::now()));
+                                return self.redraw();
+                            }
+                        }
+                    }
+                    a.set_mode(m);
+                }
+                self.chats.popup = Popup::None;
             }
             ChatHit::ModelMenu => {
                 self.chats.popup =
@@ -2104,6 +2139,8 @@ impl App {
             "!board" => self.show_board(true),
             "!side" => self.chats.side_scroll = 520.0,
             "!models" => self.chats.popup = Popup::Models,
+            "!modes" => self.chat_click(ChatHit::ModeMenu),
+            "!full" => self.chat_click(ChatHit::PickMode(Mode::Full)),
             "!projects" => self.chats.popup = Popup::Projects,
             "!form" => self.open_form(None),
             t if t.starts_with("!type ") => {

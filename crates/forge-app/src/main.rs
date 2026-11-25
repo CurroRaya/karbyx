@@ -1744,6 +1744,7 @@ impl App {
         let board_view = self.board_visible.then(|| self.board_view(&usage));
         let chat_on = self.chat_visible;
         let chat_env = chat_on.then(|| chat::draw::Env {
+            mcp: self.chats.saved.mcp.values().any(|s| s.always),
             tick,
             hover: self.hover.and_then(Self::chat_hit),
             zoom: (self.font_spec().size_pt / 14.0).clamp(0.6, 2.5),

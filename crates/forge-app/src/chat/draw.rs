@@ -5,6 +5,7 @@
 //! caja de escritura.
 
 use chrono::{DateTime, Local, NaiveDate};
+use forge_agent::agent::Mode;
 use forge_agent::know::Source;
 use forge_agent::tools::{Detail, DiffLine, LineKind};
 
@@ -788,6 +789,8 @@ pub struct Env {
     pub focused: bool,
     pub projects: Vec<std::path::PathBuf>,
     pub claude: bool,
+    /// Hay servidores MCP que valen en cualquier conversación.
+    pub mcp: bool,
 }
 
 /// Botones para cambiar de vista. `on`: 0 chat, 1 mesa, 2 terminal.
@@ -1038,6 +1041,7 @@ pub fn draw_chat(
         Popup::None => {}
         Popup::Models => models_menu(over, area, x, top, chats, env),
         Popup::Projects => projects_menu(over, area, x, top, chats, env),
+        Popup::Modes(sure) => modes_menu(over, area, x, top, chats, sure.is_some(), env),
         Popup::Memory(v) => memory_panel(over, area, v, env),
         Popup::Mcp(p) => grew = Some(panels::mcp_panel(over, area, chats, p, env)),
         Popup::McpForm(f) => panels::mcp_form(over, area, chats, f, env),
@@ -1422,10 +1426,14 @@ fn composer(
         None => ("Elige un modelo", HOT),
     };
     pill(ui, gfx, "◆", if model.is_some() { EMBER } else { HOT }, name, ChatHit::ModelMenu, nc, ui.s(250.0));
-    if c.root.is_some() {
-        let (icon, t, color) =
-            if c.auto() { ("»", "Automático", HOT) } else { ("?", "Pregunta antes", DIM) };
-        pill(ui, gfx, icon, if c.auto() { HOT } else { EMBER }, t, ChatHit::Mode, color, ui.s(150.0));
+    // Sin carpeta solo hay algo que permitir si hay servidores MCP.
+    if c.root.is_some() || env.mcp {
+        let (icon, t, ic, color) = match c.mode() {
+            Mode::Ask => ("?", "Pregunta antes", EMBER, DIM),
+            Mode::Auto => ("»", "Automático", HOT, HOT),
+            Mode::Full => ("⚠", "Total", ui::RED, ui::RED),
+        };
+        pill(ui, gfx, icon, ic, t, ChatHit::ModeMenu, color, ui.s(150.0));
     }
 
     // Enviar / parar.
@@ -1521,7 +1529,15 @@ fn welcome(ui: &mut Ui, view: Area, x: f32, w: f32, c: &Chat, has_model: bool, n
     } else if let Some(p) = &c.root {
         (
             format!("¿Qué hacemos en {}?", folder_name(p)),
-            "Puedo leer, editar y ejecutar en esta carpeta. Te pido permiso antes de cambiar nada.",
+            match c.mode() {
+                Mode::Ask => {
+                    "Puedo leer, editar y ejecutar en esta carpeta. Te pido permiso antes de cambiar nada."
+                }
+                Mode::Auto => {
+                    "Edito y ejecuto en esta carpeta sin preguntar. Para salir de ella, te pido permiso."
+                }
+                Mode::Full => "Lo hago todo sin preguntar, también fuera de esta carpeta y del sandbox.",
+            },
         )
     } else {
         (
@@ -1664,7 +1680,7 @@ fn memory_panel(ui: &mut Ui, screen: Area, v: &MemoryView, env: &Env) {
     let mut y = a.y + ui.s(22.0);
     ui.text("Memoria y habilidades", x, y, w, 19.0, TEXT, true, Align::Left);
     y += ui.s(32.0);
-    let about = "Lo que tu modelo tiene en cuenta en cada conversación. Nada se guarda sin que lo apruebes.";
+    let about = "Lo que tu modelo tiene en cuenta en cada conversación. Nada se guarda sin que lo apruebes, salvo en modo Total.";
     ui.text(about, x, y, w, 12.5, DIM, false, Align::Left);
     y += ui.s(34.0);
     // Se reparte el alto: las notas mandan, pero siempre se ven habilidades.
@@ -1919,6 +1935,65 @@ fn models_menu(ui: &mut Ui, screen: Area, x: f32, bottom: f32, chats: &Chats, en
             None => menu_row(ui, b, r, env),
         }
         y += b.h;
+    }
+    ui.hit(a, Hit::Chat(ChatHit::Inside));
+}
+
+fn modes_menu(ui: &mut Ui, screen: Area, x: f32, bottom: f32, chats: &Chats, sure: bool, env: &Env) {
+    let cur = chats.current().map_or(Mode::Ask, |c| c.mode());
+    let full = if sure {
+        "Pulsa otra vez para activarlo."
+    } else {
+        "No pregunta nada: fuera del sandbox, fuera de la carpeta, MCP, claves y memoria."
+    };
+    let rows = [
+        (Mode::Ask, "?", EMBER, "Pregunta antes", "Lee la carpeta. Para editar o ejecutar, te pregunta."),
+        (
+            Mode::Auto,
+            "»",
+            HOT,
+            "Automático",
+            "Edita en la carpeta y ejecuta en el sandbox. Lo demás, lo pregunta.",
+        ),
+        (Mode::Full, "⚠", ui::RED, if sure { "¿Seguro?" } else { "Total" }, full),
+    ];
+    let rh = ui.s(52.0);
+    let foot = ui.s(if sure { 62.0 } else { 34.0 });
+    let w = ui.s(520.0).min(screen.w - ui.s(40.0));
+    let a = popup_box(ui, x, bottom, w, rh * rows.len() as f32 + foot + ui.s(12.0));
+    for (i, (m, icon, color, title, sub)) in rows.into_iter().enumerate() {
+        let b = Area::new(a.x + ui.s(6.0), a.y + ui.s(6.0) + rh * i as f32, a.w - ui.s(12.0), rh);
+        let hit = ChatHit::PickMode(m);
+        let warn = sure && m == Mode::Full;
+        if warn {
+            ui.panel(b, [0x33, 0x1a, 0x17], ui::RED, 8.0, 1.0);
+        } else if env.hover == Some(hit) {
+            ui.round(b, ui::ACTIVE_BG, 1.0, 8.0);
+        }
+        let on = cur == m;
+        let (icon, color) = if on { ("✓", ui::GREEN) } else { (icon, color) };
+        ui.text(icon, b.x + ui.s(12.0), b.y + ui.s(9.0), ui.s(18.0), 12.0, color, true, Align::Left);
+        let tc = if m == Mode::Full { ui::RED } else { TEXT };
+        let tx = b.x + ui.s(34.0);
+        ui.text(title, tx, b.y + ui.s(8.0), b.w - ui.s(46.0), 13.0, tc, on || warn, Align::Left);
+        ui.text(sub, tx, b.y + ui.s(28.0), b.w - ui.s(46.0), 11.5, DIM, false, Align::Left);
+        ui.hit(b, Hit::Chat(hit));
+    }
+    let y = a.bottom() - foot + ui.s(4.0);
+    let lines: &[(&str, Rgb)] = if sure {
+        &[
+            ("Puede borrar archivos, leer tus claves y enviar lo que lea fuera de tu Mac.", HOT),
+            ("Una página, un archivo o una herramienta pueden engañar al modelo.", HOT),
+        ]
+    } else {
+        &[(
+            "Vale para esta conversación, hasta que cierres forge.  Mayús+Tab alterna los dos primeros.",
+            FAINT,
+        )]
+    };
+    for (i, (t, c)) in lines.iter().enumerate() {
+        let y = y + ui.s(20.0) * i as f32 + ui.s(2.0);
+        ui.text(*t, a.x + ui.s(18.0), y, a.w - ui.s(36.0), 11.5, *c, false, Align::Left);
     }
     ui.hit(a, Hit::Chat(ChatHit::Inside));
 }

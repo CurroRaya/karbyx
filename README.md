@@ -6,7 +6,7 @@
 
 Sirves un modelo en tu PC con llama.cpp o Strata y forge, en el Mac, se conecta
 a él por tu red: lee tu proyecto, lo edita y ejecuta comandos, pidiéndote
-permiso. El modelo solo piensa: las herramientas se ejecutan en el Mac y lo que
+permiso (o sin pedirlo, si tú quieres). El modelo solo piensa: las herramientas se ejecutan en el Mac y lo que
 lee viaja a tu PC, no a la nube, salvo que tú añadas
 [algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust y
 dibujada por la GPU, y está en español.
@@ -27,7 +27,7 @@ tareas a tu modelo local, cada una en su propia copia del proyecto.
 Además:
 
 - **[Memoria](#memoria-y-habilidades)**: recuerda lo que le pidas, sobre ti o
-  sobre cada proyecto, y nunca guarda nada sin tu permiso.
+  sobre cada proyecto, y te enseña cada nota antes de guardarla.
 - **[Habilidades](#memoria-y-habilidades)**: procedimientos en `SKILL.md`, los
   tuyos o los que encuentres con su buscador.
 - **[Servidores MCP](#servidores-mcp)**: herramientas de otros programas y
@@ -231,8 +231,15 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
   preguntan enseñando el diff o el comando. **⌘↵** permite, **esc** para, y si
   escribes otra cosa el modelo la recibe como respuesta.
 - **Automático** (⇧⇥, o *Siempre en este chat*): edita en la carpeta y ejecuta
-  en el sandbox sin preguntar. Trabaja sobre tus archivos, no sobre una copia:
-  úsalo con git al día.
+  en el sandbox sin preguntar; lo que se sale, lo pregunta. Trabaja sobre tus
+  archivos, no sobre una copia: úsalo con git al día.
+- **Total**: **no pregunta nada**. Ejecuta fuera del sandbox, sale de la carpeta,
+  lee archivos con claves, usa tus servidores MCP y guarda en la memoria. Se elige
+  en el menú de permisos, confirmándolo, y vale solo para esa conversación hasta
+  que cierres forge. Un modelo puede equivocarse, o una página o un archivo pueden
+  engañarlo: puede borrar cosas tuyas o enviarlas fuera. Lo que hace queda a la
+  vista en el chat, pero ya hecho. Arrancar un servidor MCP nuevo se sigue
+  aprobando aparte.
 - **Mientras trabaja** puedes escribir el siguiente mensaje, que se envía al
   acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y forge
   avisa si una termina o pide permiso y no la estás viendo.
@@ -252,10 +259,12 @@ vive en `~/Library/Caches/forge` y desaparece con ella.
 | `edit`, `write` | Cambiar una parte de un archivo, o crearlo | Se pregunta, con el diff |
 | `bash` | Ejecutar un comando en la carpeta, dentro del sandbox | Se pregunta |
 | `skill` | Leer una habilidad | Libre |
-| `servidor__herramienta` | Herramientas de tus servidores MCP | Se pregunta siempre, salvo las que digas |
-| `remember`, `forget`, `save_skill` | Cambiar la memoria y las habilidades | Se pregunta siempre |
+| `servidor__herramienta` | Herramientas de tus servidores MCP | Se pregunta siempre (\*), salvo las que digas |
+| `remember`, `forget`, `save_skill` | Cambiar la memoria y las habilidades | Se pregunta siempre (\*) |
 
-**Se pregunta siempre**, también en Automático: ejecutar fuera del sandbox,
+(\*) Menos en Total, que no pregunta nada.
+
+**Se pregunta siempre**, también en Automático (pero no en Total): ejecutar fuera del sandbox,
 salir de la carpeta, leer archivos que suelen tener claves (`.env`, `*.pem`...)
 y escribir en `.forge`, `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
 herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
@@ -293,9 +302,9 @@ cuenta en cada conversación.
   Las tuyas van en `~/.config/forge/skills/<nombre>/`; las de un proyecto, en
   `.forge/skills/` o `.claude/skills/`. Si se llaman igual, manda la tuya. Las de
   un proyecto ajeno son instrucciones de otro: léelas antes, sobre todo si vas a
-  usar Automático.
+  usar Automático o Total.
 
-El modelo **nunca guarda nada sin tu permiso**, tampoco en Automático, y las
+El modelo **no guarda nada sin tu permiso**, tampoco en Automático (en Total, sí), y las
 tareas lanzadas desde la mesa no pueden ni pedirlo. La memoria está sin cifrar en
 `~/Library/Application Support/forge/chat.memoria`, solo para ti. Un cambio de
 memoria se nota en las conversaciones nuevas o reabiertas (borrar una nota, en el
@@ -326,7 +335,7 @@ Cómo se tratan:
 - **Lo que apruebas es lo que se usa**: si la orden, la dirección o las cabeceras
   cambian en el archivo, vuelve a pedirte permiso. El `.mcp.json` de un proyecto no
   se carga solo; *Traer del proyecto* lo enseña para que lo revises.
-- **Cada llamada se pregunta**, también en Automático, enseñando sus datos.
+- **Cada llamada se pregunta**, también en Automático (no en Total), enseñando sus datos.
   *Siempre esta herramienta* deja de preguntar por ella.
 - **Cada herramienta ocupa contexto** (el panel dice cuánto). Actívalos solo en
   los proyectos que los usan, y apaga las herramientas que sobren.
@@ -338,7 +347,8 @@ retirar el permiso del todo, hazlo en la web del servicio.
 
 #### Qué protege y qué no
 
-- Los comandos se ejecutan en el **sandbox de macOS**: sin red, sin lanzar
+- Los comandos se ejecutan en el **sandbox de macOS** (salvo los que permitas
+  fuera, o en Total, los que el modelo decida): sin red, sin lanzar
   otras apps, sin leer las claves habituales (`~/.ssh`, `~/.aws`, llavero,
   `~/.claude`...) y escribiendo solo en la carpeta, una caché de compilación y
   una carpeta temporal. Si no se puede aislar, no se ejecutan. El resto de tus
@@ -363,8 +373,9 @@ ocurre si tú lo haces, lo añades o lo permites:
 | Al buscar un servidor MCP | `registry.modelcontextprotocol.io` | Lo que escribes |
 | Al buscar una habilidad | `skills.sh` | Lo que escribes |
 | Al traer una habilidad | GitHub | Qué repositorio |
-| Con un servidor MCP remoto activo | Ese servicio, y donde inicies sesión | Lo que el modelo le mande: se te enseña antes, salvo en las herramientas que marques con *Siempre* |
+| Con un servidor MCP remoto activo | Ese servicio, y donde inicies sesión | Lo que el modelo le mande: se te enseña antes, salvo en las herramientas que marques con *Siempre* o en Total |
 | Con un servidor MCP activo en tu Mac | Lo que decida ese programa | Se ejecuta con tus permisos y con red |
+| En modo Total | Adonde decida el modelo | Puede ejecutar cualquier cosa con red, sin enseñártela antes |
 | Si tus tests usan red (`[verify] network`) | Lo que hagan esos tests | Podrían enviar lo que pueden leer |
 | Si permites un comando *Fuera del sandbox* | Lo que haga ese comando | Se te enseña antes |
 | Si usas Claude Code, Codex CLI o Gemini CLI | Su proveedor | Lo que haga ese asistente, con su cuenta |
@@ -435,7 +446,7 @@ y lo terminado se enfría a acero.
 | ⌘E | La mesa de agentes / volver a las terminales |
 | ↵ / ⇧↵ | Enviar / línea nueva (en el chat) |
 | ⌘↵ / esc | Permitir lo que pide el modelo / no permitirlo y parar |
-| ⇧⇥ | Preguntar antes / Automático (en el chat); quién hace la tarea (en la mesa) |
+| ⇧⇥ | Preguntar antes / Automático (en el chat; *Total*, en su menú); quién hace la tarea (en la mesa) |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |
 | ⌘⌥←→↑↓ | Moverse entre paneles |

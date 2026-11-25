@@ -7,7 +7,7 @@
 
 use std::sync::mpsc;
 
-use forge_agent::agent::{Agent, Decision, Event, Setup};
+use forge_agent::agent::{Agent, Decision, Event, Mode, Setup};
 use forge_agent::api::{self, Server};
 
 fn main() {
@@ -24,7 +24,7 @@ fn main() {
     eprintln!("{models:?}");
     let (tx, rx) = mpsc::channel();
     let mut agent = Agent::spawn(vec![], move |e| drop(tx.send(e)));
-    agent.set_auto(true);
+    agent.set_mode(Mode::Auto);
     let setup = Setup {
         server,
         model: models[0].id.clone(),

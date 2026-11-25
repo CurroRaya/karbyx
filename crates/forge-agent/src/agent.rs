@@ -5,7 +5,7 @@
 //! Vive en su propio hilo; la interfaz le manda órdenes y recibe eventos.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,28 @@ pub enum Decision {
     AllowTool,
     /// No, con una explicación opcional para el modelo.
     Deny(String),
+}
+
+/// Qué se hace sin preguntar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Mode {
+    /// Solo leer el proyecto.
+    Ask,
+    /// Además, editar en el proyecto y ejecutar en el sandbox.
+    Auto,
+    /// Todo, también fuera del sandbox y del proyecto.
+    Full,
+}
+
+impl Mode {
+    fn from_u8(n: u8) -> Self {
+        match n {
+            0 => Self::Ask,
+            1 => Self::Auto,
+            _ => Self::Full,
+        }
+    }
 }
 
 /// Con qué modelo y en qué carpeta se trabaja.
@@ -114,7 +136,7 @@ pub struct Agent {
     /// Último turno cancelado.
     stopped: Arc<AtomicU64>,
     turn: u64,
-    auto: Arc<AtomicBool>,
+    mode: Arc<AtomicU8>,
     working: Arc<AtomicBool>,
     stale: Arc<AtomicBool>,
 }
@@ -130,7 +152,7 @@ impl Agent {
     pub fn spawn(history: Vec<Msg>, on: impl Fn(Event) + Send + 'static) -> Self {
         let (orders, rx) = mpsc::channel();
         let stopped = Arc::new(AtomicU64::new(0));
-        let auto = Arc::new(AtomicBool::new(false));
+        let mode = Arc::new(AtomicU8::new(Mode::Ask as u8));
         let working = Arc::new(AtomicBool::new(false));
         let stale = Arc::new(AtomicBool::new(false));
         let mut w = Worker {
@@ -138,7 +160,7 @@ impl Agent {
             on: Box::new(on),
             history,
             stopped: stopped.clone(),
-            auto: auto.clone(),
+            mode: mode.clone(),
             working: working.clone(),
             stale: stale.clone(),
             mcp: mcp::Set::default(),
@@ -150,7 +172,7 @@ impl Agent {
             learned: None,
         };
         let _ = std::thread::Builder::new().name("agente".into()).spawn(move || w.run());
-        Self { orders, stopped, turn: 0, auto, working, stale }
+        Self { orders, stopped, turn: 0, mode, working, stale }
     }
 
     pub fn prompt(&mut self, text: String, setup: Setup) {
@@ -190,13 +212,13 @@ impl Agent {
         self.stale.store(true, Ordering::Relaxed);
     }
 
-    /// Modo automático: edita en el proyecto y ejecuta en el sandbox sin preguntar.
-    pub fn set_auto(&self, on: bool) {
-        self.auto.store(on, Ordering::Relaxed);
+    /// Vale desde la próxima acción: lo que ya espera respuesta sigue esperando.
+    pub fn set_mode(&self, m: Mode) {
+        self.mode.store(m as u8, Ordering::Relaxed);
     }
 
-    pub fn auto(&self) -> bool {
-        self.auto.load(Ordering::Relaxed)
+    pub fn mode(&self) -> Mode {
+        Mode::from_u8(self.mode.load(Ordering::Relaxed))
     }
 }
 
@@ -205,7 +227,7 @@ struct Worker {
     on: Box<dyn Fn(Event) + Send>,
     history: Vec<Msg>,
     stopped: Arc<AtomicU64>,
-    auto: Arc<AtomicBool>,
+    mode: Arc<AtomicU8>,
     working: Arc<AtomicBool>,
     turn: u64,
     next_id: u64,
@@ -472,9 +494,11 @@ impl Worker {
                 return (e, false);
             }
         };
+        let mode = Mode::from_u8(self.mode.load(Ordering::Relaxed));
         let ask = match &action.need {
+            _ if mode == Mode::Full => None,
             Need::Free => None,
-            Need::Normal if self.auto.load(Ordering::Relaxed) => None,
+            Need::Normal if mode == Mode::Auto => None,
             Need::Normal => Some(Ask { reason: None, tool: None }),
             Need::Always(r) => Some(Ask { reason: Some(r.clone()), tool: self.mcp.find(&call.name) }),
         };
@@ -524,7 +548,8 @@ impl Worker {
                 Ok(Order::Answer(a, d)) if a == id => match d {
                     Decision::Allow => return None,
                     Decision::AllowAll => {
-                        self.auto.store(true, Ordering::Relaxed);
+                        // Sin rebajar el modo, si mientras tanto se ha subido.
+                        self.mode.fetch_max(Mode::Auto as u8, Ordering::Relaxed);
                         return None;
                     }
                     Decision::AllowTool => {
@@ -843,11 +868,36 @@ mod tests {
             say("Fin"),
         ]);
         let mut r = Run::new();
-        r.agent.set_auto(true);
+        r.agent.set_mode(Mode::Auto);
         r.send(&server, &dir);
         let ev = r.finish(Decision::Deny("no".into()));
         assert!(dir.join("b.txt").exists() && !dir.join(".mcp.json").exists());
         assert_eq!(ev.iter().filter(|e| matches!(e, Event::Action { ask: Some(_), .. })).count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn full_asks_nothing() {
+        let dir = project("total");
+        let out = dir.with_extension("fuera");
+        let _ = std::fs::remove_file(&out);
+        let (server, _) = serve(vec![
+            tool("write", serde_json::json!({"path": ".mcp.json", "content": "x"})),
+            tool(
+                "bash",
+                serde_json::json!({"command": format!("echo x > '{}'", out.display()), "unsandboxed": true}),
+            ),
+            tool("write", serde_json::json!({"path": ".git/config", "content": "x"})),
+            say("Fin"),
+        ]);
+        let mut r = Run::new();
+        r.agent.set_mode(Mode::Full);
+        r.send(&server, &dir);
+        let ev = r.finish(Decision::Deny("no".into()));
+        assert!(!ev.iter().any(|e| matches!(e, Event::Action { ask: Some(_), .. })));
+        assert!(dir.join(".mcp.json").exists() && out.exists());
+        assert!(!dir.join(".git/config").exists(), "lo prohibido sigue prohibido");
+        let _ = std::fs::remove_file(out);
         let _ = std::fs::remove_dir_all(dir);
     }
 
