@@ -1,0 +1,33 @@
+name: Fallo
+description: Algo no funciona como debería
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Quita antes las claves, los nombres de tu red y lo que no quieras hacer público.
+        Si es un problema de seguridad, no lo cuentes aquí: usa el aviso privado.
+  - type: textarea
+    attributes:
+      label: Qué pasa y qué esperabas
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Pasos para reproducirlo
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Versión de Karbyx, de macOS y tipo de Mac
+      placeholder: 0.1.0 (o el commit), macOS 27.2, Apple Silicon
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Si es del chat, servidor, modelo y contexto
+      placeholder: llama.cpp, Gemma 4 26B, 32k
+  - type: textarea
+    attributes:
+      label: Errores o registro
+      description: Para el rendimiento, la salida de `KARBYX_PROFILE=1 karbyx-app`.
+      render: text

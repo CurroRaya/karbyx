@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Problema de seguridad
+    url: https://github.com/CurroRaya/karbyx/security/advisories/new
+    about: Cuéntalo en privado, sin abrir un issue.

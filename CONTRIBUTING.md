@@ -5,7 +5,8 @@ fallo, proponer una idea, mejorar la documentación o enviar código.
 
 ## Informar de un fallo o proponer una idea
 
-Abre un *issue* en GitHub. Para los fallos, incluye:
+Abre un *issue* en GitHub, salvo los problemas de seguridad, que van en privado
+([SECURITY.md](SECURITY.md)). Para los fallos, incluye:
 
 - Versión de macOS y cómo lanzas Karbyx.
 - Pasos para reproducirlo y qué esperabas que pasara.
@@ -27,7 +28,8 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 3. Si tocas la interfaz, adjunta una captura. Puedes generarla sin permisos
    especiales con `KARBYX_SCREENSHOT=/tmp/karbyx.png cargo run --release -p karbyx-app`
    (en el README hay más ayudas de desarrollo).
-4. Abre el *pull request* explicando qué cambia y por qué.
+4. Abre el *pull request* explicando qué cambia y por qué. GitHub ejecuta también
+   `check.sh` y comprueba la versión mínima de Rust.
 
 ### Convenciones
 
@@ -42,6 +44,7 @@ Abre un *issue* en GitHub. Para los fallos, incluye:
 - Un test que necesite puertos, Python o crear un sandbox empieza con
   `if skip(&[Needs::…])`: donde no se pueda, se salta y lo dice. `check.sh` no
   deja saltarse ninguno.
+- Lo que note quien la usa se apunta en [CHANGELOG.md](CHANGELOG.md).
 - Los cambios de comportamiento llevan tests; si algo no se puede testear
   automáticamente, explica en el PR cómo lo has probado.
 

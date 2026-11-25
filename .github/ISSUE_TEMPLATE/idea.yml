@@ -1,0 +1,11 @@
+name: Idea
+description: Algo que te gustaría que hiciera Karbyx
+body:
+  - type: textarea
+    attributes:
+      label: Qué quieres conseguir
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Cómo te lo imaginas

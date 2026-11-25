@@ -1,6 +1,7 @@
 # Karbyx
 
 [![Licencia: GPL v3](https://img.shields.io/badge/licencia-GPL--3.0--o--posterior-blue.svg)](LICENSE)
+[![Comprobar](https://github.com/CurroRaya/karbyx/actions/workflows/comprobar.yml/badge.svg?branch=main)](https://github.com/CurroRaya/karbyx/actions/workflows/comprobar.yml)
 
 **Tu agente de programación para macOS, con los modelos que tienes en casa.**
 
@@ -10,6 +11,10 @@ permiso (o sin pedirlo, si tú quieres). El modelo solo piensa: las herramientas
 se ejecutan en el Mac y lo que lee viaja a tu PC, no a la nube, salvo que tú
 añadas [algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust
 y dibujada por la GPU, y está en español.
+
+> **Es una versión inicial (0.1).** Funciona y tiene tests, pero se ha probado en
+> pocos equipos y puede cambiar. Úsala con git al día y lee [qué protege y qué
+> no](#qué-protege-y-qué-no) antes de darle permisos.
 
 ![El chat de Karbyx: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
 
@@ -73,8 +78,9 @@ enlace. La primera vez, macOS pide permiso para la red local.
 
 ## Requisitos
 
-- **macOS** (probado en macOS 27). Linux y Windows aún no están soportados: el
-  PC del modelo puede ser cualquiera, pero Karbyx se ejecuta en un Mac.
+- **macOS** (probado en macOS 27 con Apple Silicon). Linux y Windows aún no están
+  soportados: el PC del modelo puede ser cualquiera, pero Karbyx se ejecuta en un
+  Mac.
 - **Un servidor de modelos** con la API de OpenAI. Probado con llama.cpp y
   Gemma 4 26B; Strata y otros deberían funcionar, pero no los hemos probado. El
   modelo debe admitir **herramientas** para trabajar en una carpeta, y se
@@ -660,6 +666,9 @@ KARBYX_TYPE=$'ls\nfalse\n' KARBYX_CAPTURE_SELECT=1 KARBYX_CAPTURE_DELAY=7000 KAR
 
 Las contribuciones son bienvenidas: fallos, ideas, documentación o código.
 Lee [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir un *pull request*.
+
+Los problemas de seguridad se cuentan en privado: mira [SECURITY.md](SECURITY.md).
+Lo que cambia en cada versión está en [CHANGELOG.md](CHANGELOG.md).
 
 ## Licencia
 
