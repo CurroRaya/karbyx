@@ -4,6 +4,7 @@
 
 Primera versión pública.
 
+- **Ver** los bloques de HTML o SVG en una ventana propia, sin red.
 - **Chat** con modelos locales (llama.cpp y otros servidores con la API de OpenAI):
   lee, busca, edita y ejecuta en tu carpeta, con tres modos de permisos (*Pregunta
   antes*, *Automático* y *Total*) y los comandos en el sandbox de macOS.

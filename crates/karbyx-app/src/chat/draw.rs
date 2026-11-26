@@ -144,6 +144,14 @@ impl Cached {
     }
 
     /// Textos seleccionables: (trozo, texto).
+    /// El primer «Ver» de este elemento (para las capturas).
+    pub fn preview(&self) -> Option<ChatHit> {
+        self.pieces.iter().find_map(|p| match p.what {
+            What::Copy(h @ ChatHit::Preview(..), _) => Some(h),
+            _ => None,
+        })
+    }
+
     pub fn texts(&self) -> impl Iterator<Item = (usize, String)> {
         self.pieces.iter().enumerate().filter_map(|(i, p)| match &p.what {
             What::Text { rich, select: true, .. } => {
@@ -256,6 +264,13 @@ impl Build<'_> {
             Area::new(x + w - bw - self.d(6.0), top + self.d(4.0), bw, self.d(22.0)),
             What::Copy(ChatHit::Inside, "Copiar"),
         );
+        let see = crate::preview::can_preview(lang, text).then(|| {
+            let vw = self.d(44.0);
+            self.push(
+                Area::new(x + w - bw - vw - self.d(8.0), top + self.d(4.0), vw, self.d(22.0)),
+                What::Copy(ChatHit::Inside, "Ver"),
+            )
+        });
         self.y = top + head;
         let rich = self.rich(md::highlight(lang, text), 14.0, 1.5);
         let body = self.pieces.len();
@@ -265,6 +280,9 @@ impl Build<'_> {
             codes.clear();
         }
         self.pieces[copy].what = What::Copy(ChatHit::CopyCode(item as u16, body as u16), "Copiar");
+        if let Some(see) = see {
+            self.pieces[see].what = What::Copy(ChatHit::Preview(item as u16, body as u16), "Ver");
+        }
         self.y += pad;
         self.pieces[panel].a.h = self.y - top;
     }

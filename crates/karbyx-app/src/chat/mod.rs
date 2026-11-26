@@ -67,6 +67,8 @@ pub enum ChatHit {
     Toggle(u16),
     /// Copiar el código del trozo (elemento, trozo) o la respuesta entera.
     CopyCode(u16, u16),
+    /// Ver el HTML o el SVG del trozo (elemento, trozo) en una ventana.
+    Preview(u16, u16),
     CopyAnswer(u16),
     /// Resumir la conversación ahora.
     Compact,
@@ -1470,6 +1472,12 @@ impl App {
         }
     }
 
+    /// El código de un trozo (elemento, trozo) tal como se ve.
+    fn code_text(&self, item: u16, piece: u16) -> Option<String> {
+        let cache = self.chats.current()?.items.get(item as usize)?.cache.as_ref()?;
+        cache.texts().find(|(k, _)| *k == piece as usize).map(|(_, t)| t)
+    }
+
     pub(super) fn chat_click(&mut self, hit: ChatHit) {
         // Un clic en otro sitio cancela la confirmación de borrado.
         let confirm = self.chats.confirm.take();
@@ -1611,12 +1619,20 @@ impl App {
                 }
             }
             ChatHit::CopyCode(i, j) => {
-                let text = self.chats.current().and_then(|c| {
-                    let cache = c.items.get(i as usize)?.cache.as_ref()?;
-                    cache.texts().find(|(k, _)| *k == j as usize).map(|(_, t)| t)
-                });
-                if let Some(t) = text {
+                if let Some(t) = self.code_text(i, j) {
                     self.set_clipboard(t, "Código copiado");
+                }
+            }
+            ChatHit::Preview(i, j) => {
+                if let Some(t) = self.code_text(i, j) {
+                    let title = match self.chats.current().map(|c| c.title.as_str()) {
+                        Some(t) if !t.is_empty() => format!("Vista previa · {t}"),
+                        _ => "Vista previa".to_string(),
+                    };
+                    let proxy = self.proxy.clone();
+                    crate::preview::open(&title, crate::preview::page(&t), move |e| {
+                        drop(proxy.send_event(UserEvent::Toast(format!("Vista previa: {e}"))));
+                    });
                 }
             }
             ChatHit::CopyAnswer(i) => {
@@ -2229,6 +2245,19 @@ impl App {
             "!mcpopen" => self.chat_click(ChatHit::McpOpen(0)),
             "!skill" => self.chat_click(ChatHit::SkillAdd),
             "!fetch" => self.chat_click(ChatHit::SkillFetch),
+            t if t.starts_with("!leer ") => {
+                let path = std::path::PathBuf::from(&t[6..]);
+                crate::preview::read_text(move |s| drop(std::fs::write(&path, s)));
+            }
+            "!ver" => {
+                let hit = self
+                    .chats
+                    .current()
+                    .and_then(|c| c.items.iter().find_map(|i| i.cache.as_ref()?.preview()));
+                if let Some(h) = hit {
+                    self.chat_click(h);
+                }
+            }
             t if t.starts_with("!hit ") => {
                 self.chat_click(ChatHit::SkillHit(t[5..].parse().unwrap_or(0)));
             }

@@ -15,6 +15,7 @@ mod keys;
 mod mcp;
 mod owner;
 mod panes;
+mod preview;
 mod query;
 mod rects;
 mod review;
@@ -238,6 +239,8 @@ enum UserEvent {
     SkillHits(u64, Result<Vec<karbyx_agent::catalog::Hit>, String>),
     /// Carpeta elegida para el chat.
     Folder(PathBuf),
+    /// Un aviso breve para el chat.
+    Toast(String),
     /// Modo de prueba: mensaje para el chat.
     ChatSay(String),
     /// Bytes para un panel concreto (p. ej. el ↵ tras escribirle a un agente).
@@ -2209,6 +2212,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Skills(t, r) => self.on_skills(t, *r),
             UserEvent::SkillHits(t, r) => self.on_skill_hits(t, r),
             UserEvent::Folder(p) => self.set_chat_project(Some(p)),
+            UserEvent::Toast(t) => self.toast(t),
             UserEvent::ChatSay(t) if t == "!discard" => self.review_click(Hit::ReviewDiscard, event_loop),
             UserEvent::ChatSay(t) => self.chat_say(t),
             UserEvent::WritePane(pane, bytes) => {

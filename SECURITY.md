@@ -33,6 +33,8 @@ Por ejemplo, que en *Pregunta antes* o en *Automático*, sin que lo apruebes:
 - Se arranque un servidor MCP, se use una de sus herramientas o se guarde algo en
   la memoria.
 - Una tarjeta de permiso enseñe algo distinto de lo que se hará.
+- La vista previa (*Ver*) cargue algo de la red, se vaya a otra página o lea tus
+  archivos.
 
 Y, en cualquier modo: que una clave o una sesión llegue a quien no debe, o que una
 página, un archivo o una habilidad ejecute algo al abrirlo o instalarlo.

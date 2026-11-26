@@ -260,6 +260,11 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   desde un punto hasta otro lejano, haz clic en el primero, desplázate y pulsa
   **⇧ clic** en el segundo; **⌘⇧↓** y **⌘⇧↑** van hasta el final o el principio.
   Se copia lo que está desplegado.
+- **Ver**: los bloques de HTML o SVG llevan **Ver** junto a *Copiar*. Abre lo que
+  ha escrito el modelo (un juego, una página, un dibujo) en una ventana con el
+  motor de Safari, **sin red**: no puede cargar nada de internet ni irse a otra
+  página. Lo que necesite de fuera, como librerías de una CDN, no funcionará;
+  pídele que lo meta todo en el archivo. No guarda nada entre una vista y otra.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
   Al llegar a tres cuartos, el modelo **resume** lo antiguo y sigue, conservando
   tal cual lo último y tu petición; el resumen se puede ver en la conversación.
@@ -375,6 +380,9 @@ retirar el permiso del todo, hazlo en la web del servicio.
 - Las **conversaciones** se guardan sin cifrar en
   `~/Library/Application Support/karbyx/chat.d`, también solo para ti, con lo que
   el modelo haya leído de tus archivos. Borrarlas en Karbyx las borra del disco.
+- La **vista previa** (*Ver*) ejecuta el JavaScript que haya escrito el modelo,
+  pero sin red ni acceso a tus archivos. WebRTC también se le quita, aunque eso
+  se hace desde la propia página y no es tan sólido como el bloqueo de la red.
 
 #### Qué sale de tu Mac
 
