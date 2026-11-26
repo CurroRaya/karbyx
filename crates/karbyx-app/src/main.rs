@@ -241,6 +241,8 @@ enum UserEvent {
     Folder(PathBuf),
     /// Un aviso breve para el chat.
     Toast(String),
+    /// Resultado de probar un buscador.
+    SearchChecked(Box<karbyx_agent::browse::Search>, Result<(), String>),
     /// Modo de prueba: mensaje para el chat.
     ChatSay(String),
     /// Bytes para un panel concreto (p. ej. el ↵ tras escribirle a un agente).
@@ -2213,6 +2215,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::SkillHits(t, r) => self.on_skill_hits(t, r),
             UserEvent::Folder(p) => self.set_chat_project(Some(p)),
             UserEvent::Toast(t) => self.toast(t),
+            UserEvent::SearchChecked(s, r) => self.on_search_checked(*s, r),
             UserEvent::ChatSay(t) if t == "!discard" => self.review_click(Hit::ReviewDiscard, event_loop),
             UserEvent::ChatSay(t) => self.chat_say(t),
             UserEvent::WritePane(pane, bytes) => {

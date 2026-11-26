@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ureq::Agent;
 
@@ -23,28 +24,37 @@ const HITS: usize = 8;
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) \
                   Version/18.0 Safari/605.1.15";
 
-/// Con qué se busca.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Con qué se busca. Todos piden la cuenta del usuario: los buscadores no
+/// dejan que un programa busque sin clave (piden demostrar que eres una persona).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Search {
-    /// Sin clave ni cuenta.
+    /// Aún no ha elegido ninguno.
     #[default]
-    DuckDuckGo,
-    /// Un SearXNG (con el formato JSON activado): su dirección.
-    SearXng(String),
+    Unset,
+    /// La API de Tavily, con su clave.
+    Tavily(String),
     /// La API de Brave Search, con su clave.
     Brave(String),
+    /// Un SearXNG (con el formato JSON activado): su dirección.
+    SearXng(String),
 }
 
 impl Search {
     /// Adónde va lo que se busca.
     pub fn host(&self) -> String {
         match self {
-            Self::DuckDuckGo => "html.duckduckgo.com".into(),
-            Self::SearXng(url) => crate::web::host(url),
+            Self::Unset => String::new(),
+            Self::Tavily(_) => "api.tavily.com".into(),
             Self::Brave(_) => "api.search.brave.com".into(),
+            Self::SearXng(url) => crate::web::host(url),
         }
     }
 }
+
+/// Resumen de una búsqueda sin buscador elegido (la app ofrece elegirlo).
+pub const NO_ENGINE: &str = "falta elegir buscador";
+/// Resumen de una búsqueda con una clave que el servicio no acepta.
+pub const BAD_KEY: &str = "el buscador no acepta la clave";
 
 /// Lo que hace una llamada ya preparada.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,7 +113,8 @@ pub fn prepare(call: &Call, trusted: &HashSet<String>, engine: &Search) -> Optio
             if query.is_empty() || query.len() > 400 {
                 return Err("Give a query of up to 400 characters.".into());
             }
-            let need = if trusted.contains(SEARCH_SITE) {
+            // Sin buscador no sale nada: no hay que preguntar.
+            let need = if trusted.contains(SEARCH_SITE) || *engine == Search::Unset {
                 Need::Free
             } else {
                 Need::Always(format!("lo que se busca se envía a {}", engine.host()))
@@ -181,11 +192,27 @@ fn get(
     req: ureq::RequestBuilder<ureq::typestate::WithoutBody>,
     url: &str,
 ) -> Result<(String, String), Failed> {
-    let mut r = req.call().map_err(|e| {
+    read(req.call(), url)
+}
+
+/// La respuesta, como (tipo, texto); los errores, explicados.
+fn read(
+    r: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    url: &str,
+) -> Result<(String, String), Failed> {
+    let mut r = r.map_err(|e| {
         let why = crate::web::explain(&e, url);
         fail(format!("Could not reach the page: {why}"), why)
     })?;
     let status = r.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err(fail(
+            format!(
+                "The server answered with error {status}: the key is missing or not valid. If this was a search, tell the user to check the key in Karbyx (Buscador)."
+            ),
+            BAD_KEY,
+        ));
+    }
     if status >= 400 {
         return Err(fail(format!("The server answered with error {status}."), format!("error {status}")));
     }
@@ -247,14 +274,21 @@ struct Hit {
 
 fn search(query: &str, engine: &Search, max: usize) -> Result<Outcome, Failed> {
     let hits = match engine {
-        Search::DuckDuckGo => {
-            let url = format!("https://html.duckduckgo.com/html/?q={}", encode(query));
-            let (_, body) = get(agent().get(&url), &url)?;
-            ddg_hits(&body)
+        Search::Unset => {
+            return Err(fail(
+                "No search engine is set up yet. Tell the user to choose one in Karbyx (Buscador, at the bottom left \
+                 of the chat): it needs their own key. Meanwhile, if you know a page that has the answer, read it with fetch.",
+                NO_ENGINE,
+            ));
         }
-        Search::SearXng(base) => {
-            let url = format!("{}/search?q={}&format=json", base.trim_end_matches('/'), encode(query));
-            let (_, body) = get(agent().get(&url), &url)?;
+        Search::Tavily(key) => {
+            let url = "https://api.tavily.com/search";
+            let body = json!({"query": query, "max_results": HITS}).to_string();
+            let req = agent()
+                .post(url)
+                .header("Authorization", format!("Bearer {key}"))
+                .header("Content-Type", "application/json");
+            let (_, body) = read(req.send(body), url)?;
             json_hits(&body, "/results", "content")?
         }
         Search::Brave(key) => {
@@ -266,15 +300,18 @@ fn search(query: &str, engine: &Search, max: usize) -> Result<Outcome, Failed> {
             )?;
             json_hits(&body, "/web/results", "description")?
         }
+        Search::SearXng(base) => {
+            let url = format!("{}/search?q={}&format=json", base.trim_end_matches('/'), encode(query));
+            let (_, body) = get(agent().get(&url), &url)?;
+            json_hits(&body, "/results", "content")?
+        }
     };
     if hits.is_empty() {
-        let text = match engine {
-            Search::DuckDuckGo => {
-                "No results. DuckDuckGo may be limiting automated searches; try other words, or ask the user to set another search engine."
-            }
-            _ => "No results. Try other words.",
-        };
-        return Ok(Outcome { ok: true, text: text.into(), summary: "sin resultados".into() });
+        return Ok(Outcome {
+            ok: true,
+            text: "No results. Try other words.".into(),
+            summary: "sin resultados".into(),
+        });
     }
     let mut out = String::new();
     for (i, h) in hits.iter().take(HITS).enumerate() {
@@ -286,6 +323,11 @@ fn search(query: &str, engine: &Search, max: usize) -> Result<Outcome, Failed> {
     let n = hits.len().min(HITS);
     let summary = if n == 1 { "1 resultado".into() } else { format!("{n} resultados") };
     Ok(Outcome { ok: true, text: out.chars().take(max).collect(), summary })
+}
+
+/// Prueba un buscador con una búsqueda de verdad. El error, en español.
+pub fn check(engine: &Search) -> Result<(), String> {
+    search("rust", engine, 200).map(|_| ()).map_err(|(_, summary)| summary)
 }
 
 /// Para poner en una dirección.
@@ -301,56 +343,7 @@ fn encode(s: &str) -> String {
     out
 }
 
-fn decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
-                    Ok(v) => {
-                        out.push(v);
-                        i += 3;
-                        continue;
-                    }
-                    Err(_) => out.push(b'%'),
-                }
-            }
-            b'+' => out.push(b' '),
-            c => out.push(c),
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// Resultados de la página de DuckDuckGo sin JavaScript.
-fn ddg_hits(html: &str) -> Vec<Hit> {
-    let mut hits = Vec::new();
-    for chunk in html.split("class=\"result__a\"").skip(1) {
-        let href = attr(chunk, "href").unwrap_or_default();
-        // Los enlaces pasan por DuckDuckGo: la dirección real va en `uddg`.
-        let url = match href.split_once("uddg=") {
-            Some((_, rest)) => decode(rest.split('&').next().unwrap_or_default()),
-            None => entities(&href),
-        };
-        let title = inline_text(
-            chunk.split_once('>').map_or("", |(_, r)| r.split("</a>").next().unwrap_or_default()),
-        );
-        let snippet = chunk
-            .split_once("class=\"result__snippet\"")
-            .and_then(|(_, r)| r.split_once('>'))
-            .map(|(_, r)| inline_text(r.split("</a>").next().unwrap_or_default()))
-            .unwrap_or_default();
-        // Los anuncios llevan a DuckDuckGo mismo.
-        if url.starts_with("http") && !url.contains("duckduckgo.com/y.js") && !title.is_empty() {
-            hits.push(Hit { title, url, snippet });
-        }
-    }
-    hits
-}
-
 /// Resultados de una API en JSON: lista en `pointer`, con `title`, `url` y el resumen en `snippet`.
 fn json_hits(body: &str, pointer: &str, snippet: &str) -> Result<Vec<Hit>, Failed> {
     let v: Value = serde_json::from_str(body).map_err(|_| {
@@ -704,25 +697,6 @@ mod tests {
     }
 
     #[test]
-    fn duckduckgo_results() {
-        let html = r#"<div class="result"><h2><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.rust-lang.org%2Fes%2F&amp;rut=abc">Rust &amp; <b>Cargo</b></a></h2>
-            <a class="result__snippet" href="x">Un lenguaje <b>rápido</b>.</a></div>
-            <div class="result"><a class="result__a" href="https://duckduckgo.com/y.js?ad=1">Anuncio</a></div>
-            <div class="result"><a class="result__a" href="https://docs.rs/">docs.rs</a></div>"#;
-        let h = ddg_hits(html);
-        assert_eq!(h.len(), 2, "{h:?}");
-        assert_eq!(
-            h[0],
-            Hit {
-                title: "Rust & Cargo".into(),
-                url: "https://www.rust-lang.org/es/".into(),
-                snippet: "Un lenguaje rápido.".into()
-            }
-        );
-        assert_eq!(h[1].url, "https://docs.rs/");
-    }
-
-    #[test]
     fn api_results() {
         let searx = r#"{"results":[{"title":"A","url":"https://a.es","content":"uno"},{"title":"mal","url":"javascript:x"}]}"#;
         assert_eq!(
@@ -732,30 +706,49 @@ mod tests {
         let brave = r#"{"web":{"results":[{"title":"B","url":"https://b.es","description":"con <strong>marcas</strong>"}]}}"#;
         assert_eq!(json_hits(brave, "/web/results", "description").unwrap()[0].snippet, "con marcas");
         assert!(json_hits("<html>", "/results", "content").is_err());
+        let tavily =
+            r#"{"query":"q","results":[{"title":"T","url":"https://t.es","content":"tres","score":0.9}]}"#;
+        assert_eq!(json_hits(tavily, "/results", "content").unwrap()[0].snippet, "tres");
+    }
+
+    #[test]
+    fn without_engine_it_says_so() {
+        let a = prepare(&call("web_search", json!({"query": "hola"})), &HashSet::new(), &Search::Unset)
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.need, Need::Free, "no sale nada: no se pregunta");
+        let o = run(&Job::Search { query: "hola".into(), engine: Search::Unset }, 1000);
+        assert!(!o.ok && o.summary == NO_ENGINE && o.text.contains("Buscador"), "{o:?}");
+        let t = prepare(
+            &call("web_search", json!({"query": "hola"})),
+            &HashSet::new(),
+            &Search::Tavily("k".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(t.need, Need::Always(ref r) if r.contains("api.tavily.com")));
     }
 
     #[test]
     fn encoding_round_trip() {
         assert_eq!(encode("rust ñ & co?"), "rust+%C3%B1+%26+co%3F");
-        assert_eq!(decode("https%3A%2F%2Fa.es%2F%C3%B1+x"), "https://a.es/ñ x");
-        assert_eq!(decode("100%"), "100%");
     }
 
     #[test]
     fn asks_unless_trusted() {
         let none = HashSet::new();
-        let a = prepare(&call("fetch", json!({"url": "https://ej.com/p#sec"})), &none, &Search::DuckDuckGo)
+        let a = prepare(&call("fetch", json!({"url": "https://ej.com/p#sec"})), &none, &Search::Unset)
             .unwrap()
             .unwrap();
         assert_eq!(a.target, "https://ej.com/p");
         assert!(matches!(a.need, Need::Always(ref r) if r.contains("ej.com")));
         assert_eq!(a.detail, Detail::None);
         let long = format!("https://ej.com/{}", "x".repeat(80));
-        let a = prepare(&call("fetch", json!({"url": long})), &none, &Search::DuckDuckGo).unwrap().unwrap();
+        let a = prepare(&call("fetch", json!({"url": long})), &none, &Search::Unset).unwrap().unwrap();
         assert_eq!(a.detail, Detail::Call(long));
         assert_eq!(a.site.as_deref(), Some("ej.com"));
         let trusted: HashSet<String> = ["ej.com".to_string()].into();
-        let a = prepare(&call("fetch", json!({"url": "https://ej.com/q"})), &trusted, &Search::DuckDuckGo)
+        let a = prepare(&call("fetch", json!({"url": "https://ej.com/q"})), &trusted, &Search::Unset)
             .unwrap()
             .unwrap();
         assert_eq!(a.need, Need::Free);
@@ -772,11 +765,11 @@ mod tests {
             "https://a.es/ x",
         ] {
             assert!(
-                prepare(&call("fetch", json!({"url": bad})), &none, &Search::DuckDuckGo).unwrap().is_err(),
+                prepare(&call("fetch", json!({"url": bad})), &none, &Search::Unset).unwrap().is_err(),
                 "{bad}"
             );
         }
-        assert!(prepare(&call("read", json!({})), &none, &Search::DuckDuckGo).is_none());
+        assert!(prepare(&call("read", json!({})), &none, &Search::Unset).is_none());
     }
 
     #[test]
@@ -792,12 +785,15 @@ mod tests {
                 ("<html><title>T</title><p>hola</p></html>", "text/html; charset=utf-8"),
                 ("\u{89}PNG", "image/png"),
                 ("0123456789", "text/plain"),
+                ("no", "401"),
             ] {
                 let (mut s, _) = l.accept().unwrap();
                 let mut buf = [0u8; 2048];
                 let _ = s.read(&mut buf);
+                let (code, kind) =
+                    if kind == "401" { ("401 Unauthorized", "text/plain") } else { ("200 OK", kind) };
                 let r = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {code}\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 s.write_all(r.as_bytes()).unwrap();
@@ -808,21 +804,26 @@ mod tests {
         assert!(o.ok && o.text == "# T\n\nhola", "{o:?}");
         let o = run(&Job::Fetch { url: url.clone(), offset: 0 }, 1000);
         assert!(!o.ok && o.summary.contains("image/png"), "{o:?}");
-        let o = run(&Job::Fetch { url, offset: 2 }, 4);
+        let o = run(&Job::Fetch { url: url.clone(), offset: 2 }, 4);
         assert!(
             o.ok && o.text.starts_with("2345\n[10 characters in total; continue with offset 6]"),
             "{o:?}"
         );
+        let o = run(&Job::Fetch { url, offset: 0 }, 1000);
+        assert!(!o.ok && o.summary == BAD_KEY, "{o:?}");
     }
 
-    /// Con red: `cargo test -p karbyx-agent search_live -- --ignored`.
+    /// Con red: `cargo test -p karbyx-agent search_live -- --ignored`. Con
+    /// `KARBYX_TAVILY_KEY`, también busca (gasta una búsqueda de esa cuenta).
     #[test]
     #[ignore]
     fn search_live() {
-        let o =
-            run(&Job::Search { query: "rust programming language".into(), engine: Search::DuckDuckGo }, 4000);
-        eprintln!("{}", o.text);
-        assert!(o.ok && o.text.contains("rust-lang.org"), "{o:?}");
+        if let Ok(key) = std::env::var("KARBYX_TAVILY_KEY") {
+            let engine = Search::Tavily(key);
+            let o = run(&Job::Search { query: "rust programming language".into(), engine }, 4000);
+            eprintln!("{}", o.text);
+            assert!(o.ok && o.text.contains("rust-lang.org"), "{o:?}");
+        }
         let o = run(&Job::Fetch { url: "https://example.com/".into(), offset: 0 }, 4000);
         assert!(o.ok && o.text.contains("Example Domain"), "{o:?}");
     }

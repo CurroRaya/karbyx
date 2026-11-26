@@ -13,6 +13,7 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use karbyx_agent::api::{Msg, Server, Stats};
+use karbyx_agent::browse::Search;
 use karbyx_agent::files;
 use karbyx_agent::tools::Detail;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,8 @@ pub struct Saved {
     pub worker: Option<String>,
     /// Lo decidido de cada servidor MCP.
     pub mcp: BTreeMap<String, McpState>,
+    /// Con qué busca en internet, con su clave (por eso aquí, solo para ti).
+    pub search: Search,
 }
 
 fn path() -> Option<PathBuf> {

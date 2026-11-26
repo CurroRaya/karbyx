@@ -6,6 +6,7 @@
 
 pub mod draw;
 pub mod edit;
+pub mod engine;
 pub mod extend;
 pub mod md;
 pub mod panels;
@@ -70,6 +71,11 @@ pub enum ChatHit {
     /// Ver el HTML o el SVG del trozo (elemento, trozo) en una ventana.
     Preview(u16, u16),
     CopyAnswer(u16),
+    /// El buscador: abrir su ventana, elegir uno, abrir su web, quitarlo.
+    SearchSetup,
+    SearchEngine(u8),
+    SearchSite,
+    SearchRemove,
     /// Resumir la conversación ahora.
     Compact,
     /// Panel de memoria: abrirlo, olvidar una nota, abrir su archivo, y la
@@ -671,6 +677,7 @@ pub enum Popup {
     McpSearch(Box<McpSearch>),
     Skill(Box<SkillForm>),
     Form(Box<Form>),
+    Search(Box<engine::SearchForm>),
 }
 
 /// Lo que enseña el panel de memoria.
@@ -1155,7 +1162,7 @@ impl App {
             let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
             let mcp = extend::servers_for(&self.chats.mcp, &self.chats.saved.mcp, know.project.as_deref());
             let know = Some(know);
-            let search = self.config.search.engine();
+            let search = self.chats.saved.search.clone();
             a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know, mcp, search });
         }
         let (id, copy) = (c.id, c.worktree.is_some());
@@ -1710,7 +1717,11 @@ impl App {
                     f.focus = n;
                 }
             }
+            ChatHit::FormOk if matches!(self.chats.popup, Popup::Search(_)) => self.search_submit(),
             ChatHit::FormOk => self.form_submit(),
+            ChatHit::SearchSetup | ChatHit::SearchEngine(_) | ChatHit::SearchSite | ChatHit::SearchRemove => {
+                self.search_click(hit)
+            }
             ChatHit::FormCancel => self.chats.popup = Popup::None,
             ChatHit::Inside => {}
             h => self.extend_click(h),
@@ -1724,6 +1735,12 @@ impl App {
             Popup::Form(f) => {
                 let ed = if f.focus == 0 { &mut f.url } else { &mut f.key };
                 ed.insert(&t.replace(['\n', '\r', '\t'], ""));
+                if f.status != Some(Ok(())) {
+                    f.status = None;
+                }
+            }
+            Popup::Search(f) => {
+                f.value.insert(&t.replace(['\n', '\r', '\t'], ""));
                 if f.status != Some(Ok(())) {
                     f.status = None;
                 }
@@ -1908,6 +1925,7 @@ impl App {
             NamedKey::Enter if !cmd && self.extend_enter() => {}
             NamedKey::Escape if self.extend_back() => {}
             NamedKey::Enter if form => self.form_submit(),
+            NamedKey::Enter if matches!(self.chats.popup, Popup::Search(_)) => self.search_submit(),
             NamedKey::Enter if cmd => match self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
                 Some(id) => self.chat_answer(id, Decision::Allow),
                 None => self.chat_submit(true),
@@ -1986,6 +2004,7 @@ impl App {
             Popup::McpForm(f) => Some(if f.on_key { &mut f.key } else { &mut f.text }),
             Popup::McpSearch(f) => f.editor(),
             Popup::Skill(f) => Some(&mut f.url),
+            Popup::Search(f) => Some(&mut f.value),
             _ => self.chats.list.get_mut(self.chats.cur).map(|c| &mut c.input),
         }
     }
@@ -1995,7 +2014,7 @@ impl App {
         if cmd
             || matches!(
                 self.chats.popup,
-                Popup::Form(_) | Popup::McpForm(_) | Popup::McpSearch(_) | Popup::Skill(_)
+                Popup::Form(_) | Popup::McpForm(_) | Popup::McpSearch(_) | Popup::Skill(_) | Popup::Search(_)
             )
         {
             if let Some(e) = self.chat_editor() {
@@ -2331,6 +2350,12 @@ impl App {
             "!full" => self.chat_click(ChatHit::PickMode(Mode::Full)),
             "!projects" => self.chats.popup = Popup::Projects,
             "!form" => self.open_form(None),
+            "!buscador" => self.open_search(),
+            t if t.starts_with("!motor ") => {
+                self.chat_click(ChatHit::SearchEngine(t[7..].trim().parse().unwrap_or(0)));
+            }
+            t if t.starts_with("!clave ") => self.chat_text(&t[7..]),
+            "!probar" => self.search_submit(),
             t if t.starts_with("!type ") => {
                 if let Some(c) = self.chats.current_mut() {
                     c.input.set(&t[6..]);

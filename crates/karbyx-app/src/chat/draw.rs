@@ -25,7 +25,7 @@ const CARD: Rgb = [0x1a, 0x17, 0x14];
 const CODE_BG: Rgb = [0x18, 0x15, 0x13];
 const BUBBLE: Rgb = [0x2a, 0x23, 0x1d];
 const LINE: Rgb = [0x2a, 0x25, 0x21];
-const FAINT: Rgb = [0x6a, 0x60, 0x57];
+pub(super) const FAINT: Rgb = [0x6a, 0x60, 0x57];
 const EMBER_DEEP: Rgb = [0xd2, 0x5f, 0x2c];
 const ON_EMBER: Rgb = [0x1c, 0x12, 0x0b];
 const ADD_BG: Rgb = [0x7e, 0xb0, 0x5c];
@@ -575,6 +575,14 @@ impl Build<'_> {
         let plain = matches!(t.detail, Detail::None);
         if plain && asking.is_none() {
             self.tool_head(i, t, 0.0, w, !t.output.is_empty());
+            // Buscar sin buscador, o con una clave que no vale: se arregla desde aquí.
+            let fix = |s: &str| s == karbyx_agent::browse::NO_ENGINE || s == karbyx_agent::browse::BAD_KEY;
+            if matches!(&t.state, ToolState::Done { summary, .. } if fix(summary)) {
+                self.y += self.d(4.0);
+                let x = self.d(22.0);
+                self.button("Elegir buscador", x, ChatHit::SearchSetup, Btn::Primary);
+                self.y += self.d(36.0);
+            }
             if open && !t.output.is_empty() {
                 let (x, top) = (self.d(22.0), self.y);
                 let panel = self.push(
@@ -912,7 +920,7 @@ fn day_group(updated: i64, today: NaiveDate) -> &'static str {
 pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: Option<Hit>) {
     ui.fill(area, SIDE_BG);
     // La lista va primero: lo que sobresale por arriba y por abajo se tapa.
-    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(136.0));
+    let (list_top, foot) = (area.y + ui.s(150.0), area.bottom() - ui.s(166.0));
     let view = Area::new(area.x, list_top, area.w - 1.0, (foot - list_top).max(0.0));
     let row = ui.s(48.0);
     let mut y = list_top - chats.side_scroll;
@@ -1012,9 +1020,13 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
     ui.hit(new, Hit::Chat(ChatHit::New));
 
     // Memoria, habilidades y servidores MCP.
-    let top = area.bottom() - ui.s(130.0);
+    let top = area.bottom() - ui.s(160.0);
     ui.fill(Area::new(area.x, top - ui.s(6.0), area.w - 1.0, 1.0), LINE);
-    let links = [("✦", "Memoria y habilidades", ChatHit::Memory), ("⧉", "Servidores MCP", ChatHit::Mcp)];
+    let links = [
+        ("✦", "Memoria y habilidades", ChatHit::Memory),
+        ("⧉", "Servidores MCP", ChatHit::Mcp),
+        ("⌕", "Buscador", ChatHit::SearchSetup),
+    ];
     for (i, (icon, text, hit)) in links.into_iter().enumerate() {
         let m = Area::new(area.x + ui.s(8.0), top + ui.s(30.0) * i as f32, area.w - ui.s(16.0), ui.s(29.0));
         let hov = env.hover == Some(hit);
@@ -1024,6 +1036,14 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
         ui.text(icon, m.x + ui.s(11.0), m.y + ui.s(6.5), ui.s(16.0), 11.5, EMBER, true, Align::Left);
         let color = if hov { TEXT } else { DIM };
         ui.text(text, m.x + ui.s(30.0), m.y + ui.s(6.0), m.w, 12.0, color, false, Align::Left);
+        // Sin buscador no se puede buscar: que se vea.
+        if hit == ChatHit::SearchSetup {
+            let (t, c) = match super::engine::chosen(&chats.saved.search) {
+                Some(name) => (name, FAINT),
+                None => ("sin elegir", HOT),
+            };
+            ui.text(t, m.x, m.y + ui.s(7.0), m.w - ui.s(10.0), 11.0, c, false, Align::Right);
+        }
         ui.hit(m, Hit::Chat(hit));
     }
 
@@ -1131,6 +1151,7 @@ pub fn draw_chat(
             }
         }
         Popup::Form(f) => form(over, area, chats, f, env),
+        Popup::Search(f) => super::engine::search_form(over, area, &chats.saved.search, f, env),
     }
     // Cuánto se puede desplazar el panel.
     match (&mut chats.popup, grew) {

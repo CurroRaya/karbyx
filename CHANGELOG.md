@@ -4,8 +4,8 @@
 
 Primera versión pública.
 
-- **Internet** en el chat: leer páginas y buscar (DuckDuckGo, SearXNG o Brave),
-  preguntando antes.
+- **Internet** en el chat: leer páginas y buscar con un buscador de tu cuenta
+  (Tavily, Brave o SearXNG), que se elige en la app; siempre preguntando antes.
 - **Copiar y la fecha** debajo de cada mensaje tuyo y de cada respuesta, con lo
   que tardó.
 - El modelo sabe **qué día es** y busca lo reciente en vez de contestar de

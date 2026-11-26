@@ -37,8 +37,8 @@ Además:
   tuyos o los que encuentres con su buscador.
 - **[Servidores MCP](#servidores-mcp)**: herramientas de otros programas y
   servicios, en tu Mac o remotos, con buscador en el registro oficial.
-- **[Internet](#el-chat-l)**: busca y lee páginas cuando se lo pides,
-  enseñándote antes qué sale de tu Mac.
+- **[Internet](#el-chat-l)**: lee páginas y, con un [buscador](#buscar-en-internet)
+  de tu cuenta, busca; siempre te enseña antes qué sale de tu Mac.
 - **[Ver](#el-chat-l)**: abre el HTML o el SVG que escribe el modelo (un juego,
   una página, un dibujo) en una ventana de Karbyx, sin red.
 - **[Interrumpir](#el-chat-l)**: si no te gusta lo que hace, escríbele otra cosa
@@ -206,7 +206,8 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 | «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
 | «El servidor pide una clave» | La clave de Karbyx no es la de `--api-key`. Menú de modelos › *Editar*. |
 | El modelo contesta, pero no usa las herramientas | Para leer o editar archivos, elige una carpeta. Si ya la tienes, o tampoco busca en internet, ese modelo o su plantilla no las admiten. |
-| Al buscar en internet no salen resultados o da error | DuckDuckGo a veces corta las búsquedas automáticas: espera un rato o pon otro buscador en `[search]` (SearXNG o Brave). Si el nombre o la clave no valen, Karbyx vuelve a DuckDuckGo. |
+| «Falta elegir buscador» al buscar | Para buscar hace falta un buscador con tu clave: pulsa **Elegir buscador** o ve a **Buscador**, abajo a la izquierda. |
+| «El buscador no acepta la clave» | La clave está mal copiada, se ha borrado o se ha acabado el plan: créala de nuevo en la web del buscador y pégala en **Buscador**. |
 | Una página no se puede leer | Solo se leen páginas de texto (HTML, JSON, texto…) de hasta 5 MB; las que se dibujan con JavaScript pueden llegar casi vacías. |
 | *Ver* abre la ventana, pero el juego o la página no funcionan | La vista previa no tiene red: lo que cargue de fuera (librerías de una CDN, imágenes, fuentes) no llega. Pídele al modelo que lo meta todo en el archivo. |
 | «No se pudo bloquear la red: no se abre» | La vista previa no se abre si no puede aislarse. Reabre Karbyx; si sigue, cuéntalo en un *issue* con tu versión de macOS. |
@@ -287,10 +288,10 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   texto, con sus enlaces. Cada vez te enseña la dirección o lo que va a buscar y
   pregunta, también en Automático, porque eso sale de tu Mac: un modelo engañado
   podría meter en una dirección algo de tus archivos. *Siempre en* ese sitio y
-  *Siempre al buscar* valen hasta que acabe la conversación. Busca en
-  DuckDuckGo, sin clave; si deja de responder, puedes poner otro buscador en la
-  [configuración](#configuración-configkarbyxkarbyxtoml). Una página larga se
-  lee por partes, para no llenar el contexto.
+  *Siempre al buscar* valen hasta que acabe la conversación. Leer páginas
+  funciona sin más; para **buscar** necesitas elegir un
+  [buscador](#buscar-en-internet) con tu propia clave. Una página larga se lee
+  por partes, para no llenar el contexto.
   Lo que sabe el modelo acaba cuando lo entrenaron, así que Karbyx le dice la
   fecha de hoy y que busque lo que pueda haber cambiado (versiones, noticias,
   precios). Si aun así contesta con datos viejos, pídele que lo busque.
@@ -317,6 +318,28 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 salir de la carpeta, leer archivos que suelen tener claves (`.env`, `*.pem`...)
 y escribir en `.karbyx`, `.claude`, `.mcp.json`, `AGENTS.md` y similares, que otras
 herramientas leen. En `.git` no se puede escribir con `edit` ni `write`.
+
+#### Buscar en internet
+
+Los buscadores no dejan que un programa busque sin una cuenta: a Karbyx le
+piden demostrar que es una persona. Claude, ChatGPT y el resto también pagan
+un buscador; aquí usas el tuyo, con tu clave. Hasta que lo elijas, el modelo
+puede leer las páginas que conozca, pero no buscar, y si lo intenta verás
+**Elegir buscador** en el chat.
+
+Abajo a la izquierda, **Buscador** (dice *sin elegir* mientras no tengas
+uno):
+
+| Buscador | Qué necesitas |
+|---|---|
+| **Tavily** (recomendado) | Una cuenta en [tavily.com](https://tavily.com). Tiene un plan gratuito, sin tarjeta. Copia la clave (`tvly-…`). |
+| **Brave** | Una cuenta en la [API de Brave Search](https://api-dashboard.search.brave.com). Pide tarjeta y trae crédito cada mes. |
+| **SearXNG** | Un servidor SearXNG, tuyo o de confianza, con el formato JSON activado. Escribe su dirección. |
+
+**Probar y guardar** hace una búsqueda de prueba con lo que has puesto: si la
+clave no vale, te lo dice y no se guarda. La clave queda en
+`~/Library/Application Support/karbyx/chat.json`, solo para ti. Cada búsqueda
+te enseña antes lo que se envía y a qué servicio. **Quitar** lo olvida.
 
 #### Memoria y habilidades
 
@@ -406,7 +429,7 @@ retirar el permiso del todo, hazlo en la web del servicio.
   viajan en claro. Úsala en tu red o por una VPN, y nunca abras el puerto a
   internet. Pon siempre una clave: sin ella, cualquiera de tu red puede usar el
   modelo.
-- Los servidores y sus claves se guardan en
+- Los servidores, sus claves y la del buscador se guardan en
   `~/Library/Application Support/karbyx/chat.json`, que solo tú puedes leer.
 - Las **conversaciones** se guardan sin cifrar en
   `~/Library/Application Support/karbyx/chat.d`, también solo para ti, con lo que
@@ -427,7 +450,7 @@ ocurre si tú lo haces, lo añades o lo permites:
 | Cuándo | Adónde va | Qué |
 |---|---|---|
 | Si el modelo lee una página | Esa dirección | La dirección entera (se te enseña antes) |
-| Si el modelo busca en internet | DuckDuckGo, o el buscador que configures | Lo que busca (se te enseña antes) |
+| Si el modelo busca en internet | El buscador que elijas (Tavily, Brave o tu SearXNG), con tu clave | Lo que busca (se te enseña antes) |
 | Al buscar un servidor MCP | `registry.modelcontextprotocol.io` | Lo que escribes |
 | Al buscar una habilidad | `skills.sh` | Lo que escribes |
 | Al traer una habilidad | GitHub | Qué repositorio |
@@ -642,11 +665,6 @@ notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 name = "forja"             # forja (carbón y brasa) | one-dark | dracula | solarized-dark | gruvbox | light
 # background = "#171412"   # cualquier color suelto sobrescribe el tema
 
-[search]                   # con qué busca el chat en internet
-engine = "duckduckgo"      # duckduckgo (sin clave) | searxng | brave
-# url = "https://searx.example"   # searxng: tu servidor, con el formato JSON activado
-# key = "..."              # brave: tu clave de su API; entonces, chmod 600 a este archivo
-
 [verify]                   # tests de un agente, en un sandbox
 auto = true                # solo en los proyectos que actives; false: en ninguno
 network = []               # proyectos cuyos tests necesitan red
@@ -694,7 +712,7 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ```bash
 scripts/check.sh               # formato, clippy y tests: lo que tiene que pasar antes de subir un cambio
 cargo test --workspace         # dentro del sandbox, lo que ahí no se puede probar se salta y lo dice (SALTADO)
-cargo test -p karbyx-agent live -- --ignored     # contra el registro MCP, skills.sh y DuckDuckGo de verdad (necesita red)
+cargo test -p karbyx-agent live -- --ignored     # contra el registro MCP, skills.sh y una web de verdad (necesita red); con KARBYX_TAVILY_KEY, también busca
 cargo run --release -p karbyx-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
 KARBYX_SCREENSHOT=/tmp/karbyx.png cargo run --release -p karbyx-app   # vuelca un frame a PNG
 KARBYX_PROVIDER=codex cargo run --release -p karbyx-app               # arranca con ese asistente
