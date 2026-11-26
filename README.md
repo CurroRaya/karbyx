@@ -37,6 +37,12 @@ Además:
   tuyos o los que encuentres con su buscador.
 - **[Servidores MCP](#servidores-mcp)**: herramientas de otros programas y
   servicios, en tu Mac o remotos, con buscador en el registro oficial.
+- **[Internet](#el-chat-l)**: busca y lee páginas cuando se lo pides,
+  enseñándote antes qué sale de tu Mac.
+- **[Ver](#el-chat-l)**: abre el HTML o el SVG que escribe el modelo (un juego,
+  una página, un dibujo) en una ventana de Karbyx, sin red.
+- **[Interrumpir](#el-chat-l)**: si no te gusta lo que hace, escríbele otra cosa
+  y pulsa ↵; lo para y pasa a lo nuevo.
 
 Karbyx es software libre: puedes usarlo, estudiarlo, modificarlo y compartirlo.
 Las versiones modificadas que se distribuyan deben publicar su código con la
@@ -83,8 +89,8 @@ enlace. La primera vez, macOS pide permiso para la red local.
   Mac.
 - **Un servidor de modelos** con la API de OpenAI. Probado con llama.cpp y
   Gemma 4 26B; Strata y otros deberían funcionar, pero no los hemos probado. El
-  modelo debe admitir **herramientas** para trabajar en una carpeta, y se
-  recomiendan **32k de contexto** o más.
+  modelo debe admitir **herramientas** para trabajar en una carpeta o usar
+  internet, y se recomiendan **32k de contexto** o más.
 - **Herramientas de línea de comandos de Xcode** (el enlazador que usa Rust):
 
   ```bash
@@ -199,7 +205,12 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 | «… no responde» al conectar | El PC está apagado o el cortafuegos de Windows corta el puerto. Comprueba también la IP: el router puede cambiarla. |
 | «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
 | «El servidor pide una clave» | La clave de Karbyx no es la de `--api-key`. Menú de modelos › *Editar*. |
-| El modelo contesta, pero no usa las herramientas | Elige una carpeta; si ya la tienes, ese modelo o su plantilla no las admiten. |
+| El modelo contesta, pero no usa las herramientas | Para leer o editar archivos, elige una carpeta. Si ya la tienes, o tampoco busca en internet, ese modelo o su plantilla no las admiten. |
+| Al buscar en internet no salen resultados o da error | DuckDuckGo a veces corta las búsquedas automáticas: espera un rato o pon otro buscador en `[search]` (SearXNG o Brave). Si el nombre o la clave no valen, Karbyx vuelve a DuckDuckGo. |
+| Una página no se puede leer | Solo se leen páginas de texto (HTML, JSON, texto…) de hasta 5 MB; las que se dibujan con JavaScript pueden llegar casi vacías. |
+| *Ver* abre la ventana, pero el juego o la página no funcionan | La vista previa no tiene red: lo que cargue de fuera (librerías de una CDN, imágenes, fuentes) no llega. Pídele al modelo que lo meta todo en el archivo. |
+| «No se pudo bloquear la red: no se abre» | La vista previa no se abre si no puede aislarse. Reabre Karbyx; si sigue, cuéntalo en un *issue* con tu versión de macOS. |
+| ↵ no para al modelo | Si te está pidiendo permiso, ↵ le manda lo escrito como respuesta; para pararlo, **esc**. |
 | Olvida detalles en tareas largas | El contexto se llena y se resume: arranca el servidor con más (`-c`) o empieza otra conversación (⌘N). |
 | Un servidor MCP no arranca | Falta el programa que lo lanza (`npx`, `uvx`, `docker`...). El panel *Servidores MCP* enseña su error. |
 | Un MCP remoto no deja iniciar sesión | No admite otros programas: crea una clave en su web y pégala en *Clave*. El transporte antiguo (SSE) no está soportado. |
@@ -217,8 +228,8 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 
 | Crate | Qué hace |
 |---|---|
-| `karbyx-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, resumen del contexto, memoria y habilidades, cliente MCP (en el Mac y remoto, con OAuth), los buscadores del registro MCP y de skills.sh, y el sandbox de macOS con la ejecución de comandos |
-| `karbyx-app` | La app: render por GPU (wgpu + glyphon), chat con sus conversaciones guardadas, paneles de memoria, habilidades y MCP, mesa, terminales con pestañas y paneles, panel de consumo, `karbyx.toml` con temas y atajos |
+| `karbyx-agent` | El agente, sin interfaz: cliente del servidor de modelos (streaming y cancelación), bucle de herramientas con permisos, resumen del contexto, memoria y habilidades, lectura de páginas y búsqueda en internet, cliente MCP (en el Mac y remoto, con OAuth), los buscadores del registro MCP y de skills.sh, y el sandbox de macOS con la ejecución de comandos |
+| `karbyx-app` | La app: render por GPU (wgpu + glyphon), chat con sus conversaciones guardadas, vista previa sin red (WebKit), paneles de memoria, habilidades y MCP, mesa, terminales con pestañas y paneles, panel de consumo, `karbyx.toml` con temas y atajos |
 | `karbyx-term` | Sesión de terminal independiente de la UI: PTY con bucle de E/S propio + emulador VT (`alacritty_terminal`), bloques OSC 133 e integración con zsh, selección, búsqueda, protocolos de ratón y snapshot del grid |
 | `karbyx-ai` | Lee el historial de Claude Code (`~/.claude`), Codex CLI (`~/.codex`) y Gemini CLI (`~/.gemini/tmp`), lo normaliza, deduplica y calcula ventanas de 5 h, semana, proyecciones y límites oficiales cuando el proveedor los publica (Codex) |
 | `karbyx-usage` | CLI de consumo: `summary`, `daily`, `blocks`, `models`, `projects`, `watch`, `line`, `--json`, `-p claude\|codex\|gemini` |
@@ -242,7 +253,7 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   en el sandbox sin preguntar; lo que se sale, lo pregunta. Trabaja sobre tus
   archivos, no sobre una copia: úsalo con git al día.
 - **Total**: **no pregunta nada**. Ejecuta fuera del sandbox, sale de la carpeta,
-  lee archivos con claves, usa tus servidores MCP y guarda en la memoria. Se elige
+  lee archivos con claves, usa internet y tus servidores MCP y guarda en la memoria. Se elige
   en el menú de permisos, confirmándolo, y vale solo para esa conversación hasta
   que cierres Karbyx. Un modelo puede equivocarse, o una página o un archivo pueden
   engañarlo: puede borrar cosas tuyas o enviarlas fuera. Lo que hace queda a la
@@ -272,7 +283,7 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 - **Internet**: pídele que busque algo o pásale una dirección y la leerá como
   texto, con sus enlaces. Cada vez te enseña la dirección o lo que va a buscar y
   pregunta, también en Automático, porque eso sale de tu Mac: un modelo engañado
-  podría meter en una dirección algo de tus archivos. *Siempre en este sitio* y
+  podría meter en una dirección algo de tus archivos. *Siempre en* ese sitio y
   *Siempre al buscar* valen hasta que acabe la conversación. Busca en
   DuckDuckGo, sin clave; si deja de responder, puedes poner otro buscador en la
   [configuración](#configuración-configkarbyxkarbyxtoml). Una página larga se
@@ -487,7 +498,7 @@ y lo terminado se enfría a acero.
 | ⌘E | La mesa de agentes / volver a las terminales |
 | ↵ / ⇧↵ | Enviar / línea nueva (en el chat) |
 | ⌘↵ / esc | Permitir lo que pide el modelo / no permitirlo y parar |
-| ↵ / ⌘↵ mientras trabaja | Pararlo y decirle lo escrito / decírselo al acabar |
+| ↵ / ⌘↵ mientras trabaja | Pararlo y decirle lo escrito / decírselo al acabar (si está pidiendo permiso, ⌘↵ permite) |
 | ⇧⇥ | Preguntar antes / Automático (en el chat; *Total*, en su menú); quién hace la tarea (en la mesa) |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |
