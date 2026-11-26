@@ -248,8 +248,10 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   engañarlo: puede borrar cosas tuyas o enviarlas fuera. Lo que hace queda a la
   vista en el chat, pero ya hecho. Arrancar un servidor MCP nuevo se sigue
   aprobando aparte.
-- **Mientras trabaja** puedes escribir el siguiente mensaje, que se envía al
-  acabar; **esc** lo para. Puedes tener varias conversaciones a la vez, y Karbyx
+- **Mientras trabaja**, si no te gusta lo que hace, escribe otra cosa y pulsa
+  **↵**: lo para y le llega tu mensaje en cuanto se detiene, con lo que ya había
+  hecho a la vista. Con **⌘↵** el mensaje espera a que acabe. **esc** lo para sin
+  más. Puedes tener varias conversaciones a la vez, y Karbyx
   avisa si una termina o pide permiso y no la estás viendo.
 - **Conversaciones**: se guardan solas a cada paso y siguen ahí al reabrir
   Karbyx, ordenadas por fecha. Si lo cierras con una a medias, se para y puedes
@@ -485,6 +487,7 @@ y lo terminado se enfría a acero.
 | ⌘E | La mesa de agentes / volver a las terminales |
 | ↵ / ⇧↵ | Enviar / línea nueva (en el chat) |
 | ⌘↵ / esc | Permitir lo que pide el modelo / no permitirlo y parar |
+| ↵ / ⌘↵ mientras trabaja | Pararlo y decirle lo escrito / decírselo al acabar |
 | ⇧⇥ | Preguntar antes / Automático (en el chat; *Total*, en su menú); quién hace la tarea (en la mesa) |
 | ⌘T / ⌘⇧C | Nueva pestaña de terminal / del asistente seleccionado |
 | ⌘D / ⌘⇧D | Dividir el panel a la derecha / abajo |

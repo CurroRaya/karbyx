@@ -1460,7 +1460,7 @@ fn composer(
     if text.is_empty() {
         let hint = match (asking, c.busy()) {
             (true, _) => "Dile qué prefieres, o contesta con los botones…",
-            (_, true) => "Escribe lo siguiente; se enviará al acabar…",
+            (_, true) => "↵ lo para y le dice esto · ⌘↵ se lo dice al acabar…",
             _ if c.root.is_some() => "¿Qué hacemos?",
             _ => "Pregunta lo que quieras…",
         };
@@ -1586,7 +1586,7 @@ fn composer(
         ui.round(b, ui::HOVER_BG, 1.0, 8.0);
         let one = crate::agents::one_line(q, 160);
         ui.text(
-            format!("Después: {one}"),
+            format!("{}: {one}", if c.phase == Phase::Stopping { "En cuanto pare" } else { "Después" }),
             b.x + ui.s(12.0),
             b.y + ui.s(5.0),
             b.w - ui.s(24.0),

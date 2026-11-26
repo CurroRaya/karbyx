@@ -1322,7 +1322,9 @@ impl App {
     }
 
     /// ↵: envía, contesta a un permiso con un motivo, o deja en cola.
-    fn chat_submit(&mut self) {
+    /// Envía lo escrito. Si está trabajando, lo para y se lo dice en cuanto
+    /// se pare; con `later`, espera a que acabe.
+    fn chat_submit(&mut self, later: bool) {
         let i = self.chats.cur;
         let Some(c) = self.chats.list.get_mut(i) else { return };
         let text = c.input.text().trim().to_string();
@@ -1338,6 +1340,12 @@ impl App {
                 Some(q) => format!("{q}\n{text}"),
                 None => text,
             });
+            if !later && c.phase != Phase::Stopping {
+                c.phase = Phase::Stopping;
+                if let Some(a) = &c.agent {
+                    a.stop();
+                }
+            }
             return;
         }
         self.send_to(i, text);
@@ -1519,7 +1527,7 @@ impl App {
                     }
                 }
             }
-            ChatHit::Send => self.chat_submit(),
+            ChatHit::Send => self.chat_submit(false),
             ChatHit::Stop => self.chat_stop(),
             ChatHit::Mode => {
                 if let Some(a) = self.chats.current().and_then(|c| c.agent.as_ref()) {
@@ -1887,10 +1895,10 @@ impl App {
             NamedKey::Enter if form => self.form_submit(),
             NamedKey::Enter if cmd => match self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
                 Some(id) => self.chat_answer(id, Decision::Allow),
-                None => self.chat_submit(),
+                None => self.chat_submit(true),
             },
             NamedKey::Enter if shift || alt => self.chat_text("\n"),
-            NamedKey::Enter => self.chat_submit(),
+            NamedKey::Enter => self.chat_submit(false),
             NamedKey::Escape => {
                 let asking = self.chats.current().and_then(|c| c.asking()).map(|t| t.id);
                 if !matches!(self.chats.popup, Popup::None) {
@@ -2317,7 +2325,7 @@ impl App {
                 if let Some(c) = self.chats.current_mut() {
                     c.input.set(t);
                 }
-                self.chat_submit();
+                self.chat_submit(false);
             }
         }
         self.redraw();
