@@ -260,7 +260,8 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   desde un punto hasta otro lejano, haz clic en el primero, desplázate y pulsa
   **⇧ clic** en el segundo; **⌘⇧↓** y **⌘⇧↑** van hasta el final o el principio.
   Se copia lo que está desplegado.
-- **Ver**: los bloques de HTML o SVG llevan **Ver** junto a *Copiar*. Abre lo que
+- **Ver**: los bloques de HTML o SVG llevan **Ver** junto a *Copiar* (los dos se
+  quedan a la vista al desplazarte por un bloque largo). Abre lo que
   ha escrito el modelo (un juego, una página, un dibujo) en una ventana con el
   motor de Safari, **sin red**: no puede cargar nada de internet ni irse a otra
   página. Lo que necesite de fuera, como librerías de una CDN, no funcionará;

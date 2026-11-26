@@ -104,8 +104,13 @@ enum What {
         hit: ChatHit,
         style: Btn,
     },
-    /// Botón de copiar el código del trozo siguiente.
-    Copy(ChatHit, &'static str),
+    /// Botón de un bloque de código («Copiar», «Ver»). Al desplazar se queda
+    /// arriba de lo visible mientras se vea el bloque, que acaba en `end`.
+    Copy {
+        hit: ChatHit,
+        text: &'static str,
+        end: f32,
+    },
     /// Icono de estado animado.
     Spin,
     /// No se ve: es lo que se copia de algo que no se puede seleccionar.
@@ -147,7 +152,7 @@ impl Cached {
     /// El primer «Ver» de este elemento (para las capturas).
     pub fn preview(&self) -> Option<ChatHit> {
         self.pieces.iter().find_map(|p| match p.what {
-            What::Copy(h @ ChatHit::Preview(..), _) => Some(h),
+            What::Copy { hit: h @ ChatHit::Preview(..), .. } => Some(h),
             _ => None,
         })
     }
@@ -262,13 +267,13 @@ impl Build<'_> {
         let bw = self.d(64.0);
         let copy = self.push(
             Area::new(x + w - bw - self.d(6.0), top + self.d(4.0), bw, self.d(22.0)),
-            What::Copy(ChatHit::Inside, "Copiar"),
+            What::Copy { hit: ChatHit::Inside, text: "Copiar", end: 0.0 },
         );
         let see = crate::preview::can_preview(lang, text).then(|| {
             let vw = self.d(44.0);
             self.push(
                 Area::new(x + w - bw - vw - self.d(8.0), top + self.d(4.0), vw, self.d(22.0)),
-                What::Copy(ChatHit::Inside, "Ver"),
+                What::Copy { hit: ChatHit::Inside, text: "Ver", end: 0.0 },
             )
         });
         self.y = top + head;
@@ -279,12 +284,15 @@ impl Build<'_> {
         if let What::Text { codes, .. } = &mut self.pieces[body].what {
             codes.clear();
         }
-        self.pieces[copy].what = What::Copy(ChatHit::CopyCode(item as u16, body as u16), "Copiar");
-        if let Some(see) = see {
-            self.pieces[see].what = What::Copy(ChatHit::Preview(item as u16, body as u16), "Ver");
-        }
         self.y += pad;
         self.pieces[panel].a.h = self.y - top;
+        let end = self.y;
+        self.pieces[copy].what =
+            What::Copy { hit: ChatHit::CopyCode(item as u16, body as u16), text: "Copiar", end };
+        if let Some(see) = see {
+            self.pieces[see].what =
+                What::Copy { hit: ChatHit::Preview(item as u16, body as u16), text: "Ver", end };
+        }
     }
 
     fn markdown(&mut self, item: usize, text: &str) {
@@ -1181,7 +1189,10 @@ fn messages(
             continue;
         }
         for (j, p) in k.pieces.iter().enumerate() {
-            let a = Area::new(x + p.a.x, iy + p.a.y, p.a.w, p.a.h);
+            let mut a = Area::new(x + p.a.x, iy + p.a.y, p.a.w, p.a.h);
+            if let What::Copy { end, .. } = p.what {
+                a.y = stick(a.y, view.y + ui.s(6.0), iy + end - ui.s(4.0) - a.h);
+            }
             if a.y > view.bottom() || a.bottom() < view.y {
                 continue;
             }
@@ -1252,6 +1263,12 @@ fn live_text(c: &Chat) -> Option<(String, Option<std::time::Instant>)> {
         Phase::Tool => None,
         Phase::Stopping => Some(("Parando…".into(), None)),
     }
+}
+
+/// Dónde va un botón que acompaña al desplazar: en su sitio (`y`), o bajado
+/// hasta `top` si se ha ido por arriba, sin pasar de `last`.
+fn stick(y: f32, top: f32, last: f32) -> f32 {
+    y.max(top.min(last))
 }
 
 /// Pinta un rectángulo recortado a la zona visible.
@@ -1346,8 +1363,10 @@ fn paint(
             }
             ui.hit(a, Hit::Chat(*hit));
         }
-        What::Copy(hit, text) => {
+        What::Copy { hit, text, .. } => {
             let hov = env.hover == Some(*hit);
+            // Pegado arriba, tapa el código que pasa por debajo.
+            clipped(ui, view, a, |ui, b| ui.round(b, CODE_BG, 1.0, 6.0));
             if hov {
                 clipped(ui, view, a, |ui, b| ui.round(b, ui::ACTIVE_BG, 1.0, 6.0));
             }
@@ -2260,6 +2279,16 @@ pub(super) fn wrap(s: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::md::INK;
     use super::*;
+
+    #[test]
+    fn buttons_follow_the_scroll() {
+        // A la vista: en su sitio.
+        assert_eq!(stick(300.0, 100.0, 900.0), 300.0);
+        // Se ha ido por arriba: pegado arriba.
+        assert_eq!(stick(-200.0, 100.0, 900.0), 100.0);
+        // Al acabarse el bloque, se va con él.
+        assert_eq!(stick(-200.0, 100.0, 40.0), 40.0);
+    }
 
     #[test]
     fn inline_code_ranges() {
