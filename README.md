@@ -16,7 +16,7 @@ y dibujada por la GPU, y está en español.
 > pocos equipos y puede cambiar. Úsala con git al día y lee [qué protege y qué
 > no](#qué-protege-y-qué-no) antes de darle permisos.
 
-![El chat de Karbyx: un cambio en un archivo, un comando no permitido y la respuesta del modelo](assets/chat.png)
+![El chat de Karbyx: una búsqueda en internet, un cambio en un archivo y la respuesta del modelo](assets/chat.png)
 
 *Captura hecha con un servidor de prueba: ni el modelo ni la velocidad son reales.*
 
