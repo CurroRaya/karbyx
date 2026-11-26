@@ -5,11 +5,12 @@
 
 **Tu agente de programación para macOS, con los modelos que tienes en casa.**
 
-Sirves un modelo en tu PC con llama.cpp o Strata y Karbyx, en el Mac, se conecta
-a él por tu red: lee tu proyecto, lo edita y ejecuta comandos, pidiéndote
-permiso (o sin pedirlo, si tú quieres). El modelo solo piensa: las herramientas
-se ejecutan en el Mac y lo que lee viaja a tu PC, no a la nube, salvo que tú
-añadas [algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust
+Sirves un modelo con llama.cpp (o Strata, LM Studio...), en el propio Mac o en
+un PC de tu red, y Karbyx se conecta a él: lee tu proyecto, lo edita y ejecuta
+comandos, pidiéndote permiso (o sin pedirlo, si tú quieres). El modelo solo
+piensa: las herramientas se ejecutan en el Mac y lo que lee se queda en tu Mac
+o en tu red, no va a la nube, salvo que tú añadas
+[algo que salga](#qué-sale-de-tu-mac). Es una app nativa, escrita en Rust
 y dibujada por la GPU, y está en español.
 
 > **Es una versión inicial (0.1).** Funciona y tiene tests, pero se ha probado en
@@ -59,12 +60,25 @@ cd karbyx
 scripts/bundle.sh --install    # crea Karbyx.app y la copia a ~/Applications
 ```
 
-**2. Abre Karbyx** (⌘Espacio, «Karbyx»), pulsa **Conectar con mi PC** y copia la
-orden de tu servidor. Lleva una clave ya generada, que se rellena sola en el
-formulario.
+**2. Arranca el modelo**, en el mismo Mac o en un PC de tu red.
 
-**3. En el PC**, pega la orden. Con llama.cpp, cambia `modelo.gguf` por la ruta
-del tuyo:
+*En el mismo Mac* (con Apple Silicon y memoria suficiente para el modelo):
+
+```bash
+brew install llama.cpp
+```
+
+```bash
+llama-server -m modelo.gguf --port 8080 -c 32768
+```
+
+Cambia `modelo.gguf` por la ruta del tuyo. Así solo escucha en el propio Mac,
+y no hace falta clave. La dirección para Karbyx es `127.0.0.1:8080`.
+
+*En un PC de tu red* (Windows, Linux u otro Mac): abre Karbyx (⌘Espacio,
+«Karbyx»), pulsa **Conectar con mi PC** y copia la orden de tu servidor. Lleva
+una clave ya generada, que se rellena sola en el formulario. Pégala en el PC; con
+llama.cpp, cambia `modelo.gguf` por la ruta del tuyo:
 
 ```powershell
 llama-server -m modelo.gguf --host 0.0.0.0 --port 8080 -c 32768 -ngl 99 --api-key CLAVE
@@ -74,25 +88,29 @@ llama-server -m modelo.gguf --host 0.0.0.0 --port 8080 -c 32768 -ngl 99 --api-ke
 strata launch --access lan --port 8080 --api-key CLAVE
 ```
 
-Si Windows pregunta por el cortafuegos, permite solo las redes privadas.
-
-**4. Escribe la dirección del PC** en Karbyx (`192.168.1.50:8080`) y pulsa ↵. En
+Si Windows pregunta por el cortafuegos, permite solo las redes privadas. La
+dirección para Karbyx es la IP del PC con el puerto (`192.168.1.50:8080`); en
 Windows la da `ipconfig`: la «Dirección IPv4» del adaptador que tiene puerta de
-enlace. La primera vez, macOS pide permiso para la red local.
+enlace.
 
-**5. Elige una carpeta** y pide algo.
+**3. Conecta Karbyx**: ábrelo, pulsa **Conectar con mi PC** (sirve también para
+el propio Mac), escribe la dirección del paso anterior y pulsa ↵. Con un PC, la
+primera vez macOS pide permiso para la red local.
 
-**6. Opcional:** para que también pueda buscar en internet, elige un
+**4. Elige una carpeta** y pide algo.
+
+**5. Opcional:** para que también pueda buscar en internet, elige un
 [buscador](#buscar-en-internet) con tu propia clave (abajo a la izquierda,
 **Buscador**). Leer páginas funciona sin él.
 
 ## Requisitos
 
 - **macOS** (probado en macOS 27 con Apple Silicon). Linux y Windows aún no están
-  soportados: el PC del modelo puede ser cualquiera, pero Karbyx se ejecuta en un
-  Mac.
+  soportados como sitio donde ejecutar Karbyx; el modelo puede servirse en el
+  mismo Mac o en cualquier PC de tu red.
 - **Un servidor de modelos** con la API de OpenAI. Probado con llama.cpp y
-  Gemma 4 26B; Strata y otros deberían funcionar, pero no los hemos probado. El
+  Gemma 4 26B; Strata, LM Studio, Ollama y otros deberían funcionar (con la
+  dirección de su servidor compatible con OpenAI), pero no los hemos probado. El
   modelo debe admitir **herramientas** para trabajar en una carpeta o usar
   internet, y se recomiendan **32k de contexto** o más.
 - **Herramientas de línea de comandos de Xcode** (el enlazador que usa Rust):
@@ -212,7 +230,7 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 |---|---|
 | «No llego a…» al conectar | El PC está en otra red, o Karbyx no tiene permiso en *Ajustes del Sistema › Privacidad y seguridad › Red local*. |
 | «… no responde» al conectar | El PC está apagado o el cortafuegos de Windows corta el puerto. Comprueba también la IP: el router puede cambiarla. |
-| «… no hay nada en el puerto 8080» | El servidor no está arrancado, usa otro puerto o solo escucha en el propio PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). |
+| «… no hay nada en el puerto 8080» | El servidor no está arrancado o usa otro puerto. Si está en un PC, puede que solo escuche en ese PC: falta `--host 0.0.0.0` (llama.cpp) o `--access lan` (Strata). Si está en el mismo Mac, usa `127.0.0.1` y comprueba que `llama-server` sigue abierto. |
 | «El servidor pide una clave» | La clave de Karbyx no es la de `--api-key`. Menú de modelos › *Editar*. |
 | El modelo contesta, pero no usa las herramientas | Para leer o editar archivos, elige una carpeta. Si ya la tienes, o tampoco busca en internet, ese modelo o su plantilla no las admiten. |
 | «Falta elegir buscador» al buscar | Para buscar hace falta un buscador con tu clave: pulsa **Elegir buscador** o ve a **Buscador**, abajo a la izquierda. |
@@ -226,7 +244,7 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 | Un MCP remoto no deja iniciar sesión | No admite otros programas: crea una clave en su web y pégala en *Clave*. El transporte antiguo (SSE) no está soportado. |
 | Con MCP, el contexto se llena enseguida | Sus herramientas ocupan sitio: apaga las que no uses o actívalo solo en el proyecto que lo necesita. |
 | No encuentra una habilidad o un servidor | Los catálogos no los tienen todos: pega la dirección de GitHub, la carpeta o su JSON. |
-| «Un archivo de Karbyx estaba dañado» al abrir | Se ha apartado con `.roto` al final, en `~/Library/Application Support/karbyx`, y Karbyx sigue con uno nuevo. Si era `chat.json`, vuelve a conectar tu PC; si era `chat.sesiones`, inicia sesión otra vez en tus MCP. |
+| «Un archivo de Karbyx estaba dañado» al abrir | Se ha apartado con `.roto` al final, en `~/Library/Application Support/karbyx`, y Karbyx sigue con uno nuevo. Si era `chat.json`, vuelve a conectar tu servidor de modelos; si era `chat.sesiones`, inicia sesión otra vez en tus MCP. |
 | `zsh: command not found: cargo` | Rust no está en el `PATH`; ver [Requisitos](#requisitos) y abre una terminal nueva. |
 | `command not found: karbyx-app` tras instalar | Falta `~/.cargo/bin` en el `PATH` (misma línea de arriba). |
 | `linker 'cc' not found` al compilar | Instala las herramientas de Xcode: `xcode-select --install`. |
@@ -434,10 +452,11 @@ retirar el permiso del todo, hazlo en la web del servicio.
   `~/.claude`...) y escribiendo solo en la carpeta, una caché de compilación y
   una carpeta temporal. Si no se puede aislar, no se ejecutan. El resto de tus
   archivos sí se puede leer, y un comando puede leer el `.env` del proyecto.
-- La conexión con el PC es **HTTP sin cifrar**: la conversación y la clave
-  viajan en claro. Úsala en tu red o por una VPN, y nunca abras el puerto a
-  internet. Pon siempre una clave: sin ella, cualquiera de tu red puede usar el
-  modelo.
+- La conexión con el servidor de modelos es **HTTP sin cifrar**. Si el modelo
+  está en el mismo Mac (`127.0.0.1`), no sale de él. Con un PC, la
+  conversación y la clave viajan en claro por tu red: úsala ahí o por una VPN,
+  y nunca abras el puerto a internet. Pon siempre una clave: sin ella,
+  cualquiera de tu red puede usar el modelo.
 - Los servidores, sus claves y la del buscador se guardan en
   `~/Library/Application Support/karbyx/chat.json`, que solo tú puedes leer.
 - Las **conversaciones** se guardan sin cifrar en
