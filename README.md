@@ -82,6 +82,10 @@ enlace. La primera vez, macOS pide permiso para la red local.
 
 **5. Elige una carpeta** y pide algo.
 
+**6. Opcional:** para que también pueda buscar en internet, elige un
+[buscador](#buscar-en-internet) con tu propia clave (abajo a la izquierda,
+**Buscador**). Leer páginas funciona sin él.
+
 ## Requisitos
 
 - **macOS** (probado en macOS 27 con Apple Silicon). Linux y Windows aún no están
@@ -104,17 +108,22 @@ enlace. La primera vez, macOS pide permiso para la red local.
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
 
-  O con Homebrew:
+  Al acabar, abre una terminal nueva para que encuentre `cargo`.
+
+  O con Homebrew. Homebrew instala rustup sin enlazarlo al sistema, así que
+  primero hay que añadirlo al `PATH` (y `~/.cargo/bin`, donde se instalan los
+  programas de Rust), y después elegir la versión estable:
 
   ```bash
-  brew install rustup && rustup default stable
+  brew install rustup
   ```
-
-  Homebrew instala rustup sin enlazarlo al sistema, así que hay que añadirlo
-  al `PATH` (y `~/.cargo/bin`, donde se instalan los programas de Rust):
 
   ```bash
   echo 'export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+  ```
+
+  ```bash
+  rustup default stable
   ```
 
 - **Opcional:** [Claude Code](https://claude.com/claude-code), Codex CLI o
