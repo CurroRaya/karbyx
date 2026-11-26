@@ -548,19 +548,18 @@ impl Worker {
         let start = Instant::now();
         let (on, stopped, turn) = (&self.on, &self.stopped, self.turn);
         let max = ctx.map_or(20_000, |c| c.max_chars);
-        let Outcome { ok, text, summary } = match (action.know_job(), ctx) {
-            (Some(j), _) => crate::know::run(j),
-            _ if let Some(j) = action.browse_job() => crate::browse::run(j, max),
-            _ if let Some(j) = action.mcp_job() => {
-                mcp::run(j, max, &|| stopped.load(Ordering::Relaxed) >= turn)
-            }
-            (None, Some(ctx)) => {
-                tools::execute(ctx, &action, &|| stopped.load(Ordering::Relaxed) >= turn, &mut |s| {
-                    on(Event::Output(id, s.into()))
-                })
-            }
-            (None, None) => return ("There is no folder.".into(), false),
-        };
+        let Outcome { ok, text, summary } =
+            match (action.know_job(), action.browse_job(), action.mcp_job(), ctx) {
+                (Some(j), _, _, _) => crate::know::run(j),
+                (_, Some(j), _, _) => crate::browse::run(j, max),
+                (_, _, Some(j), _) => mcp::run(j, max, &|| stopped.load(Ordering::Relaxed) >= turn),
+                (None, None, None, Some(ctx)) => {
+                    tools::execute(ctx, &action, &|| stopped.load(Ordering::Relaxed) >= turn, &mut |s| {
+                        on(Event::Output(id, s.into()))
+                    })
+                }
+                (None, None, None, None) => return ("There is no folder.".into(), false),
+            };
         (self.on)(Event::Finished { id, ok, summary, output: text.clone(), took: start.elapsed() });
         (text, false)
     }
