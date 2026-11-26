@@ -76,7 +76,7 @@ Cambia `modelo.gguf` por la ruta del tuyo. Así solo escucha en el propio Mac,
 y no hace falta clave. La dirección para Karbyx es `127.0.0.1:8080`.
 
 *En un PC de tu red* (Windows, Linux u otro Mac): abre Karbyx (⌘Espacio,
-«Karbyx»), pulsa **Conectar con mi PC** y copia la orden de tu servidor. Lleva
+«Karbyx»), pulsa **Conectar mi modelo** y copia la orden de tu servidor. Lleva
 una clave ya generada, que se rellena sola en el formulario. Pégala en el PC; con
 llama.cpp, cambia `modelo.gguf` por la ruta del tuyo:
 
@@ -93,9 +93,9 @@ dirección para Karbyx es la IP del PC con el puerto (`192.168.1.50:8080`); en
 Windows la da `ipconfig`: la «Dirección IPv4» del adaptador que tiene puerta de
 enlace.
 
-**3. Conecta Karbyx**: ábrelo, pulsa **Conectar con mi PC** (sirve también para
-el propio Mac), escribe la dirección del paso anterior y pulsa ↵. Con un PC, la
-primera vez macOS pide permiso para la red local.
+**3. Conecta Karbyx**: ábrelo, pulsa **Conectar mi modelo**, escribe la
+dirección del paso anterior y pulsa ↵. Con un PC, la primera vez macOS pide
+permiso para la red local.
 
 **4. Elige una carpeta** y pide algo.
 

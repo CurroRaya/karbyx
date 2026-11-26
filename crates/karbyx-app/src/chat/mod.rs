@@ -1699,7 +1699,7 @@ impl App {
                         f.key.set(f.suggested.clone());
                     }
                     let cmd = server_command(w, f.key.text());
-                    self.set_clipboard(cmd, "Orden copiada: pégala en el PC");
+                    self.set_clipboard(cmd, "Orden copiada: pégala donde vaya a correr el modelo");
                 }
             }
             ChatHit::Suggest(i) => {
@@ -2328,6 +2328,10 @@ impl App {
             "!merge" => self.review_merge(),
             "!compact" => self.compact_chat(),
             "!board" => self.show_board(true),
+            t if t.starts_with("!lanzar ") => {
+                self.board.input = t[8..].to_string();
+                self.board_launch();
+            }
             "!side" => self.chats.side_scroll = 520.0,
             "!models" => self.chats.popup = Popup::Models,
             // Arrastrar sin soltar, soltar, y seleccionar todo o hasta el final.

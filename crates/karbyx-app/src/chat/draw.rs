@@ -1055,7 +1055,7 @@ pub fn draw_side(ui: &mut Ui, area: Area, chats: &mut Chats, env: &Env, hover: O
     }
     let (color, title, sub) = match (chats.model(), chats.servers.first()) {
         (Some((s, m)), _) => (ui::GREEN, s.name.clone(), m.name.clone()),
-        (None, None) => (FAINT, "Sin servidor".into(), "Conecta tu PC".to_string()),
+        (None, None) => (FAINT, "Sin servidor".into(), "Conecta tu modelo".to_string()),
         (None, Some(_)) => {
             let url = chats.saved.model.as_ref().map(|m| m.0.as_str());
             let s = chats
@@ -1693,12 +1693,12 @@ fn welcome(ui: &mut Ui, view: Area, x: f32, w: f32, c: &Chat, has_model: bool, n
     let (title, sub) = if no_servers {
         (
             "Conecta tu modelo".to_string(),
-            "El modelo corre en tu PC con llama.cpp o Strata. Karbyx trabaja aquí, en tu Mac, a través de tu red.",
+            "El modelo corre en este Mac o en un PC de tu red, con llama.cpp u otro servidor. Karbyx trabaja aquí, en tu Mac.",
         )
     } else if !has_model {
         (
             "Tu servidor no responde".to_string(),
-            "Enciende el PC y arranca el modelo; Karbyx lo reintenta solo.",
+            "Arranca el modelo (y enciende el PC, si está ahí); Karbyx lo reintenta solo.",
         )
     } else if let Some(p) = &c.root {
         (
@@ -1728,7 +1728,7 @@ fn welcome(ui: &mut Ui, view: Area, x: f32, w: f32, c: &Chat, has_model: bool, n
         let hov = env.hover == Some(ChatHit::AddServer);
         ui.glow(b, EMBER, if hov { 0.3 } else { 0.1 }, 11.0, 14.0);
         ui.gradient(b, (if hov { HOT } else { [0xf6, 0x9a, 0x55] }, 1.0), (EMBER_DEEP, 1.0), 11.0);
-        ui.text("Conectar con mi PC", b.x, b.y + ui.s(9.0), b.w, 14.0, ON_EMBER, true, Align::Center);
+        ui.text("Conectar mi modelo", b.x, b.y + ui.s(9.0), b.w, 14.0, ON_EMBER, true, Align::Center);
         ui.hit(b, Hit::Chat(ChatHit::AddServer));
     } else if has_model && c.root.is_some() {
         let g = ui.s(10.0);
@@ -2225,12 +2225,12 @@ fn form(ui: &mut Ui, screen: Area, chats: &Chats, f: &Form, env: &Env) {
     let pad = ui.s(26.0);
     let (x, w) = (a.x + pad, a.w - 2.0 * pad);
     let mut y = a.y + ui.s(22.0);
-    let title = if editing { "Editar servidor" } else { "Conectar con mi PC" };
+    let title = if editing { "Editar servidor" } else { "Conectar mi modelo" };
     ui.text(title, x, y, w, 19.0, TEXT, true, Align::Left);
     y += ui.s(42.0);
     if !editing {
         ui.text(
-            "1 · En el PC, arranca el modelo con una de estas órdenes:",
+            "1 · Arranca el modelo, en este Mac o en un PC de tu red, con una de estas órdenes:",
             x,
             y,
             w,
@@ -2288,7 +2288,7 @@ fn form(ui: &mut Ui, screen: Area, chats: &Chats, f: &Form, env: &Env) {
         y += ui.s(26.0);
     }
     let fields = [
-        ("Dirección", &f.url, "192.168.1.50:8080", false),
+        ("Dirección", &f.url, "127.0.0.1:8080 en este Mac, o la IP del PC", false),
         ("Clave", &f.key, "la de --api-key (si pusiste una)", true),
     ];
     for (i, (name, ed, hint, secret)) in fields.into_iter().enumerate() {
