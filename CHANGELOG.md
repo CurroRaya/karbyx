@@ -6,6 +6,10 @@ Primera versión pública.
 
 - **Internet** en el chat: leer páginas y buscar (DuckDuckGo, SearXNG o Brave),
   preguntando antes.
+- **Copiar y la fecha** debajo de cada mensaje tuyo y de cada respuesta, con lo
+  que tardó.
+- El modelo sabe **qué día es** y busca lo reciente en vez de contestar de
+  memoria.
 - Un mensaje nuevo mientras trabaja lo **interrumpe** y entra al momento (⌘↵: al
   acabar).
 - **Ver** los bloques de HTML o SVG en una ventana propia, sin red.

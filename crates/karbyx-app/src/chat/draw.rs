@@ -1154,6 +1154,8 @@ fn messages(
     z: f32,
     env: &Env,
 ) {
+    // Debajo de tus mensajes y de cada respuesta, Copiar y la fecha.
+    let foot = footers(&c.items, c.busy());
     // Alturas (solo se maqueta lo que cambió).
     let mut ys = Vec::with_capacity(c.items.len());
     let mut y = ui.s(22.0);
@@ -1169,6 +1171,9 @@ fn messages(
         }
         ys.push(y);
         y += c.items[i].cache.as_ref().map_or(0.0, |k| k.h);
+        if foot[i] {
+            y += ui.s(FOOT);
+        }
     }
     // Estado vivo al final.
     let live_y = y + ui.s(16.0);
@@ -1186,14 +1191,10 @@ fn messages(
     let oy = view.y - c.scroll;
     ui.clip = Some(view);
     let sel = c.sel.map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
-    // Debajo va el botón de copiar, si es lo último.
-    let last = c.items.len().saturating_sub(1);
-    let last_answer =
-        (!c.busy() && c.items.last().is_some_and(|i| matches!(i.body, Body::Assistant(_)))).then_some(last);
     for (i, it) in c.items.iter().enumerate() {
         let Some(k) = &it.cache else { continue };
         let iy = oy + ys[i];
-        if iy > view.bottom() || iy + k.h + ui.s(30.0) < view.y {
+        if iy > view.bottom() || iy + k.h + ui.s(FOOT + 4.0) < view.y {
             continue;
         }
         for (j, p) in k.pieces.iter().enumerate() {
@@ -1206,8 +1207,11 @@ fn messages(
             }
             paint(ui, gfx, out, view, i, j, &p.what, a, sel, &mut c.placed, env);
         }
-        if last_answer == Some(i) {
-            let b = Area::new(x - ui.s(6.0), iy + k.h + ui.s(5.0), ui.s(64.0), ui.s(22.0));
+        if foot[i] {
+            let user = matches!(it.body, Body::User(_));
+            let bw = ui.s(64.0);
+            let bx = if user { x + w - bw + ui.s(6.0) } else { x - ui.s(6.0) };
+            let b = Area::new(bx, iy + k.h + ui.s(5.0), bw, ui.s(22.0));
             let hit = ChatHit::CopyAnswer(i as u16);
             let hov = env.hover == Some(hit);
             if hov {
@@ -1224,6 +1228,15 @@ fn messages(
                 Align::Center,
             );
             ui.hit(b, Hit::Chat(hit));
+            let info = foot_text(&c.items, i);
+            if !info.is_empty() {
+                let (ty, gap) = (b.y + ui.s(3.0), ui.s(2.0));
+                if user {
+                    ui.text(info, x, ty, bx - x - gap, 11.0, FAINT, false, Align::Right);
+                } else {
+                    ui.text(info, bx + bw + gap, ty, w - bw, 11.0, FAINT, false, Align::Left);
+                }
+            }
         }
     }
     if let Some((text, since)) = live {
@@ -1249,6 +1262,55 @@ fn messages(
         ui.text("↓", b.x, b.y + ui.s(6.0), b.w, 14.0, TEXT, true, Align::Center);
         ui.hits.insert(0, (b, Hit::Chat(ChatHit::Bottom)));
     }
+}
+
+/// Alto de la línea de Copiar y la fecha.
+const FOOT: f32 = 26.0;
+
+/// Qué elementos llevan Copiar y la fecha debajo: tus mensajes y la última
+/// respuesta de cada turno (la del turno en curso, cuando acaba).
+fn footers(items: &[Item], busy: bool) -> Vec<bool> {
+    let mut out = vec![false; items.len()];
+    // Recorriendo hacia atrás: ¿ya hay una respuesta más tarde en este turno?
+    // ¿Este turno ya ha terminado (le sigue un mensaje tuyo)?
+    let (mut answered, mut closed) = (false, false);
+    for (i, it) in items.iter().enumerate().rev() {
+        match it.body {
+            Body::User(_) => {
+                out[i] = true;
+                (answered, closed) = (false, true);
+            }
+            Body::Assistant(_) => {
+                out[i] = !answered && (closed || !busy);
+                answered = true;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// La fecha de un elemento y, en una respuesta, lo que tardó desde tu mensaje.
+fn foot_text(items: &[Item], i: usize) -> String {
+    let Some(at) = items[i].at else { return String::new() };
+    let mut s = when(at);
+    if matches!(items[i].body, Body::Assistant(_))
+        && let Some(sent) =
+            items[..i].iter().rev().find(|it| matches!(it.body, Body::User(_))).and_then(|it| it.at)
+        && at > sent
+    {
+        s = format!("{s} · {}", ui::fmt_duration(std::time::Duration::from_millis((at - sent) as u64)));
+    }
+    s
+}
+
+/// «26 nov 2026, 14:32», en tu hora.
+fn when(ms: i64) -> String {
+    use chrono::{Datelike, TimeZone, Timelike};
+    const MONTHS: [&str; 12] =
+        ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+    let Some(t) = chrono::Local.timestamp_millis_opt(ms).single() else { return String::new() };
+    format!("{} {} {}, {:02}:{:02}", t.day(), MONTHS[t.month0() as usize], t.year(), t.hour(), t.minute())
 }
 
 /// Qué está haciendo, si no se ve ya en el último elemento.
@@ -2287,6 +2349,23 @@ pub(super) fn wrap(s: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::md::INK;
     use super::*;
+
+    #[test]
+    fn date_and_copy_go_under_messages_and_answers() {
+        let it = |b: Body, at: Option<i64>| Item { at, ..Item::new(b) };
+        let user = |at| it(Body::User("hola".into()), Some(at));
+        let said = |at| it(Body::Assistant("vale".into()), Some(at));
+        let note = || it(Body::Notice("·".into()), None);
+        let items = vec![user(1_000), said(2_000), note(), said(13_500), user(20_000), said(21_000)];
+        assert_eq!(footers(&items, false), [true, false, false, true, true, true]);
+        // Mientras trabaja, la respuesta en curso aún no lo lleva.
+        assert_eq!(footers(&items, true), [true, false, false, true, true, false]);
+        assert!(foot_text(&items, 3).ends_with(" · 12,5 s"), "{}", foot_text(&items, 3));
+        assert!(!foot_text(&items, 0).contains('·'));
+        assert_eq!(foot_text(&[note()], 0), "");
+        let d = when(1_764_158_400_000);
+        assert!(d.contains(" nov 2025, "), "{d}");
+    }
 
     #[test]
     fn buttons_follow_the_scroll() {

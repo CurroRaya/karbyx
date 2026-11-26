@@ -274,6 +274,9 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   desde un punto hasta otro lejano, haz clic en el primero, desplázate y pulsa
   **⇧ clic** en el segundo; **⌘⇧↓** y **⌘⇧↑** van hasta el final o el principio.
   Se copia lo que está desplegado.
+  Debajo de cada mensaje tuyo y de cada respuesta hay **Copiar**, que coge
+  ese mensaje entero, y la fecha y hora en que se envió o se terminó de
+  escribir; en las respuestas, también lo que tardó desde tu mensaje.
 - **Ver**: los bloques de HTML o SVG llevan **Ver** junto a *Copiar* (los dos se
   quedan a la vista al desplazarte por un bloque largo). Abre lo que
   ha escrito el modelo (un juego, una página, un dibujo) en una ventana con el
@@ -288,6 +291,9 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   DuckDuckGo, sin clave; si deja de responder, puedes poner otro buscador en la
   [configuración](#configuración-configkarbyxkarbyxtoml). Una página larga se
   lee por partes, para no llenar el contexto.
+  Lo que sabe el modelo acaba cuando lo entrenaron, así que Karbyx le dice la
+  fecha de hoy y que busque lo que pueda haber cambiado (versiones, noticias,
+  precios). Si aun así contesta con datos viejos, pídele que lo busque.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
   Al llegar a tres cuartos, el modelo **resume** lo antiguo y sigue, conservando
   tal cual lo último y tu petición; el resumen se puede ver en la conversación.

@@ -192,11 +192,18 @@ pub struct Item {
     /// Cambia con cada modificación (invalida lo maquetado).
     pub rev: u64,
     pub cache: Option<draw::Cached>,
+    /// Cuándo lo enviaste o cuándo acabó de escribirlo (ms desde 1970).
+    pub at: Option<i64>,
 }
 
 impl Item {
     fn new(body: Body) -> Self {
-        Self { body, open: false, rev: 0, cache: None }
+        Self { body, open: false, rev: 0, cache: None, at: None }
+    }
+
+    /// Con la hora de ahora.
+    fn now(body: Body) -> Self {
+        Self { at: Some(chrono::Utc::now().timestamp_millis()), ..Self::new(body) }
     }
 }
 
@@ -385,7 +392,8 @@ impl Chat {
                 }
             })
             .collect();
-        Stored { busy: self.busy(), stats: self.stats, history: self.history.clone(), items }
+        let times = self.items.iter().map(|i| i.at).collect();
+        Stored { busy: self.busy(), stats: self.stats, history: self.history.clone(), items, times }
     }
 
     /// Recupera lo guardado.
@@ -420,6 +428,9 @@ impl Chat {
                 })
             })
             .collect();
+        for (item, at) in self.items.iter_mut().zip(s.times) {
+            item.at = at;
+        }
         if s.busy {
             self.items.push(Item::new(Body::Notice("Se quedó a medias al cerrar Karbyx.".into())));
         }
@@ -481,13 +492,14 @@ impl Chat {
                 self.end_thinking();
                 self.set_phase(Phase::Writing);
                 match self.items.last_mut() {
-                    Some(Item { body: Body::Assistant(s), rev, .. }) => {
+                    Some(Item { body: Body::Assistant(s), rev, at, .. }) => {
                         s.push_str(&t);
                         *rev += 1;
+                        *at = Some(chrono::Utc::now().timestamp_millis());
                     }
                     // Los saltos sueltos antes de una herramienta no son un mensaje.
                     _ if t.trim().is_empty() => {}
-                    _ => self.items.push(Item::new(Body::Assistant(t.trim_start().to_string()))),
+                    _ => self.items.push(Item::now(Body::Assistant(t.trim_start().to_string()))),
                 }
             }
             Event::Reasoning(t) => {
@@ -1133,7 +1145,7 @@ impl App {
         let know = c.know();
         // `/habilidad lo que sea`: el modelo recibe la habilidad entera.
         let said = expand(&text, &know).unwrap_or_else(|| text.clone());
-        c.items.push(Item::new(Body::User(text)));
+        c.items.push(Item::now(Body::User(text)));
         c.phase = Phase::Reading(Instant::now());
         c.settled = false;
         c.stick = true;
@@ -1649,11 +1661,14 @@ impl App {
                 }
             }
             ChatHit::CopyAnswer(i) => {
-                if let Some(Body::Assistant(t)) =
-                    self.chats.current().and_then(|c| c.items.get(i as usize)).map(|i| &i.body)
-                {
-                    let t = t.trim().to_string();
-                    self.set_clipboard(t, "Respuesta copiada");
+                let body = self.chats.current().and_then(|c| c.items.get(i as usize)).map(|i| &i.body);
+                let copied = match body {
+                    Some(Body::Assistant(t)) => Some((t.trim().to_string(), "Respuesta copiada")),
+                    Some(Body::User(t)) => Some((t.trim().to_string(), "Mensaje copiado")),
+                    _ => None,
+                };
+                if let Some((t, msg)) = copied {
+                    self.set_clipboard(t, msg);
                 }
             }
             ChatHit::Compact => self.compact_chat(),

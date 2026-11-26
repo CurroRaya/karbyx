@@ -360,7 +360,9 @@ impl Worker {
         }
         let (system, defs) =
             self.frozen.as_ref().map(|f| (f.system.clone(), f.defs.clone())).unwrap_or_default();
-        let system = Msg::System(system);
+        // La fecha va aparte: el modelo no sabe en qué día vive, y así solo
+        // cambia lo que se le manda una vez al día.
+        let system = Msg::System(format!("{system}{}", when(today())));
         match self.history.first_mut() {
             Some(m @ Msg::System(_)) => *m = system,
             _ => self.history.insert(0, system),
@@ -721,6 +723,31 @@ fn add_user(history: &mut Vec<Msg>, text: String) {
     history.push(Msg::User(text));
 }
 
+/// La fecha local de hoy, `AAAA-MM-DD`.
+fn today() -> String {
+    // SAFETY: `time` y `localtime_r` solo escriben en `tm`, que es nuestro.
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return String::new();
+        }
+        format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
+    }
+}
+
+/// Lo que se le dice al modelo sobre la fecha: lo que sabe puede estar viejo.
+fn when(date: String) -> String {
+    if date.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\nToday is {date}. What you learned in training ends earlier: do not assume an older year. \
+         For anything that may have changed since (versions, releases, news, prices), search with web_search \
+         instead of answering from memory, or say your information may be out of date.\n"
+    )
+}
+
 fn system_prompt(ctx: Option<&Ctx>) -> String {
     let lang = "Reply in the language the user writes in (Spanish by default). Be concise and concrete. Use Markdown; put code in fenced blocks with their language.";
     let Some(ctx) = ctx else {
@@ -871,6 +898,7 @@ mod tests {
         assert_eq!(asks, 1, "leer no pregunta; editar sí");
         let got = got.lock().unwrap();
         assert!(got[1].contains(r#""role":"tool""#) && got[1].contains(r"1\tuno"), "{}", got[1]);
+        assert!(got[0].contains(&format!("Today is {}.", today())), "el modelo sabe qué día es");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1029,6 +1057,15 @@ mod tests {
             got[2]
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_model_knows_the_date() {
+        let d = today();
+        assert_eq!(d.len(), 10, "{d}");
+        assert!(d[..4].parse::<u32>().is_ok_and(|y| y >= 2026), "{d}");
+        assert!(when(d.clone()).contains(&format!("Today is {d}.")));
+        assert!(when(String::new()).is_empty());
     }
 
     #[test]

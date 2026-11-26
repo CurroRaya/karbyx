@@ -92,6 +92,9 @@ pub struct Stored {
     pub history: Vec<Msg>,
     /// Lo que se ve en pantalla.
     pub items: Vec<StoredItem>,
+    /// Cuándo se envió o se terminó cada elemento (ms desde 1970), a la par de
+    /// `items`. Las conversaciones antiguas no lo tienen.
+    pub times: Vec<Option<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,6 +179,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let body = Stored {
             busy: true,
+            times: vec![Some(1_700_000_000_000), None],
             stats: Some(Stats { prompt: 1, output: 2, speed: Some(3.0) }),
             history: vec![Msg::User("hola\nñ".into())],
             items: vec![
