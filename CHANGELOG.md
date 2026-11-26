@@ -4,6 +4,8 @@
 
 Primera versión pública.
 
+- **Internet** en el chat: leer páginas y buscar (DuckDuckGo, SearXNG o Brave),
+  preguntando antes.
 - **Ver** los bloques de HTML o SVG en una ventana propia, sin red.
 - **Chat** con modelos locales (llama.cpp y otros servidores con la API de OpenAI):
   lee, busca, edita y ejecuta en tu carpeta, con tres modos de permisos (*Pregunta

@@ -228,7 +228,8 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 ### El chat (⌘L)
 
 - **Carpeta**: elígela abajo a la izquierda y el modelo podrá leer, buscar,
-  editar y ejecutar en ella. Sin carpeta es un chat normal, sin herramientas.
+  editar y ejecutar en ella. Sin carpeta es un chat normal, que solo puede usar
+  internet, la memoria y las habilidades.
   Una conversación empezada se queda en su carpeta. Si el proyecto tiene
   `AGENTS.md` (o `CLAUDE.md`), el modelo lo lee al empezar.
 - **Modelo**: el menú junta los de todos tus servidores. Si el tuyo se apaga,
@@ -266,6 +267,14 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
   motor de Safari, **sin red**: no puede cargar nada de internet ni irse a otra
   página. Lo que necesite de fuera, como librerías de una CDN, no funcionará;
   pídele que lo meta todo en el archivo. No guarda nada entre una vista y otra.
+- **Internet**: pídele que busque algo o pásale una dirección y la leerá como
+  texto, con sus enlaces. Cada vez te enseña la dirección o lo que va a buscar y
+  pregunta, también en Automático, porque eso sale de tu Mac: un modelo engañado
+  podría meter en una dirección algo de tus archivos. *Siempre en este sitio* y
+  *Siempre al buscar* valen hasta que acabe la conversación. Busca en
+  DuckDuckGo, sin clave; si deja de responder, puedes poner otro buscador en la
+  [configuración](#configuración-configkarbyxkarbyxtoml). Una página larga se
+  lee por partes, para no llenar el contexto.
 - **Contexto**: abajo a la derecha se ve cuánto llevas usado y la velocidad.
   Al llegar a tres cuartos, el modelo **resume** lo antiguo y sigue, conservando
   tal cual lo último y tu petición; el resumen se puede ver en la conversación.
@@ -278,6 +287,8 @@ vive en `~/Library/Caches/karbyx` y desaparece con ella.
 | `edit`, `write` | Cambiar una parte de un archivo, o crearlo | Se pregunta, con el diff |
 | `bash` | Ejecutar un comando en la carpeta, dentro del sandbox | Se pregunta |
 | `skill` | Leer una habilidad | Libre |
+| `fetch` | Leer una página de internet o de tu red | Se pregunta siempre (\*), salvo los sitios que digas |
+| `web_search` | Buscar en internet | Se pregunta siempre (\*), salvo si dices *Siempre al buscar* |
 | `servidor__herramienta` | Herramientas de tus servidores MCP | Se pregunta siempre (\*), salvo las que digas |
 | `remember`, `forget`, `save_skill` | Cambiar la memoria y las habilidades | Se pregunta siempre (\*) |
 
@@ -381,6 +392,10 @@ retirar el permiso del todo, hazlo en la web del servicio.
 - Las **conversaciones** se guardan sin cifrar en
   `~/Library/Application Support/karbyx/chat.d`, también solo para ti, con lo que
   el modelo haya leído de tus archivos. Borrarlas en Karbyx las borra del disco.
+- Una **página de internet** puede traer texto escrito para engañar al modelo.
+  Se le dice que es solo información, y lo que haga después se te sigue
+  preguntando como siempre; en Total, no. Si le pides leer una web, mejor no
+  uses Total en esa conversación.
 - La **vista previa** (*Ver*) ejecuta el JavaScript que haya escrito el modelo,
   pero sin red ni acceso a tus archivos. WebRTC también se le quita, aunque eso
   se hace desde la propia página y no es tan sólido como el bloqueo de la red.
@@ -392,6 +407,8 @@ ocurre si tú lo haces, lo añades o lo permites:
 
 | Cuándo | Adónde va | Qué |
 |---|---|---|
+| Si el modelo lee una página | Esa dirección | La dirección entera (se te enseña antes) |
+| Si el modelo busca en internet | DuckDuckGo, o el buscador que configures | Lo que busca (se te enseña antes) |
 | Al buscar un servidor MCP | `registry.modelcontextprotocol.io` | Lo que escribes |
 | Al buscar una habilidad | `skills.sh` | Lo que escribes |
 | Al traer una habilidad | GitHub | Qué repositorio |
@@ -605,6 +622,11 @@ notify_after_secs = 10     # aviso al terminar comandos largos (0 = nunca)
 name = "forja"             # forja (carbón y brasa) | one-dark | dracula | solarized-dark | gruvbox | light
 # background = "#171412"   # cualquier color suelto sobrescribe el tema
 
+[search]                   # con qué busca el chat en internet
+engine = "duckduckgo"      # duckduckgo (sin clave) | searxng | brave
+# url = "https://searx.example"   # searxng: tu servidor, con el formato JSON activado
+# key = "..."              # brave: tu clave de su API; entonces, chmod 600 a este archivo
+
 [verify]                   # tests de un agente, en un sandbox
 auto = true                # solo en los proyectos que actives; false: en ninguno
 network = []               # proyectos cuyos tests necesitan red
@@ -652,7 +674,7 @@ cual. Los cambios en el archivo se aplican sin reiniciar. El antiguo
 ```bash
 scripts/check.sh               # formato, clippy y tests: lo que tiene que pasar antes de subir un cambio
 cargo test --workspace         # dentro del sandbox, lo que ahí no se puede probar se salta y lo dice (SALTADO)
-cargo test -p karbyx-agent live -- --ignored     # contra el registro MCP y skills.sh de verdad (necesita red)
+cargo test -p karbyx-agent live -- --ignored     # contra el registro MCP, skills.sh y DuckDuckGo de verdad (necesita red)
 cargo run --release -p karbyx-agent --example charla -- 192.168.1.50:8080 /ruta/proyecto "tarea"  # el agente sin interfaz; ejecuta en Automático
 KARBYX_SCREENSHOT=/tmp/karbyx.png cargo run --release -p karbyx-app   # vuelca un frame a PNG
 KARBYX_PROVIDER=codex cargo run --release -p karbyx-app               # arranca con ese asistente

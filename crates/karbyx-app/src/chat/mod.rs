@@ -115,6 +115,8 @@ pub enum ChatHit {
     ExtendBack,
     /// Permitir siempre una herramienta MCP.
     AllowTool(u64),
+    /// Permitir, y ese sitio de internet ya no se pregunta en esta conversación.
+    AllowSite(u64),
     /// Revisar los cambios de su copia.
     Review,
     CopyCommand(u8),
@@ -1141,7 +1143,8 @@ impl App {
             let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
             let mcp = extend::servers_for(&self.chats.mcp, &self.chats.saved.mcp, know.project.as_deref());
             let know = Some(know);
-            a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know, mcp });
+            let search = self.config.search.engine();
+            a.prompt(said, Setup { server, model, ctx, root: root.clone(), copy_of, know, mcp, search });
         }
         let (id, copy) = (c.id, c.worktree.is_some());
         if copy {
@@ -1161,7 +1164,8 @@ impl App {
         let root = c.root.clone();
         let copy_of = c.worktree.as_ref().map(|w| w.repo.clone());
         if let Some(a) = &mut c.agent {
-            a.compact(Setup { server, model, ctx, root, copy_of, know: None, mcp: vec![] });
+            let search = Default::default();
+            a.compact(Setup { server, model, ctx, root, copy_of, know: None, mcp: vec![], search });
             c.phase = Phase::Compacting(Instant::now());
             c.stick = true;
         }
@@ -1611,6 +1615,7 @@ impl App {
                 }
             }
             ChatHit::AllowAll(id) => self.chat_answer(id, Decision::AllowAll),
+            ChatHit::AllowSite(id) => self.chat_answer(id, Decision::AllowSite),
             ChatHit::Deny(id) => self.chat_answer(id, Decision::Deny(String::new())),
             ChatHit::Toggle(i) => {
                 if let Some(it) = self.chats.current_mut().and_then(|c| c.items.get_mut(i as usize)) {
@@ -2264,6 +2269,11 @@ impl App {
             "!back" => self.chat_click(ChatHit::ExtendBack),
             "!skillpick" => self.chat_click(ChatHit::SkillPick(0)),
             "!install" => self.chat_click(ChatHit::SkillInstall),
+            "!allowsite" => {
+                if let Some(id) = self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
+                    self.chat_click(ChatHit::AllowSite(id));
+                }
+            }
             "!allowtool" => {
                 if let Some(id) = self.chats.current().and_then(|c| c.asking()).map(|t| t.id) {
                     self.chat_click(ChatHit::AllowTool(id));

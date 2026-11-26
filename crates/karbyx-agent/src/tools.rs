@@ -98,6 +98,8 @@ enum Job {
     Know(know::Job),
     /// Herramienta de un servidor MCP.
     Mcp(mcp::Job),
+    /// Leer una página o buscar en internet.
+    Browse(crate::browse::Job),
     Read {
         path: PathBuf,
         offset: usize,
@@ -136,6 +138,8 @@ pub struct Action {
     pub target: String,
     pub detail: Detail,
     pub need: Need,
+    /// Sitio que se puede permitir para el resto de la conversación.
+    pub site: Option<String>,
     job: Job,
 }
 
@@ -147,11 +151,29 @@ impl Action {
         need: Need,
         job: know::Job,
     ) -> Self {
-        Self { verb, target, detail, need, job: Job::Know(job) }
+        Self { verb, target, detail, need, site: None, job: Job::Know(job) }
     }
 
     pub(crate) fn mcp(target: String, detail: Detail, need: Need, job: mcp::Job) -> Self {
-        Self { verb: "Usar", target, detail, need, job: Job::Mcp(job) }
+        Self { verb: "Usar", target, detail, need, site: None, job: Job::Mcp(job) }
+    }
+
+    pub(crate) fn browse(
+        verb: &'static str,
+        target: String,
+        detail: Detail,
+        need: Need,
+        site: Option<String>,
+        job: crate::browse::Job,
+    ) -> Self {
+        Self { verb, target, detail, need, site, job: Job::Browse(job) }
+    }
+
+    pub(crate) fn browse_job(&self) -> Option<&crate::browse::Job> {
+        match &self.job {
+            Job::Browse(j) => Some(j),
+            _ => None,
+        }
     }
 
     pub(crate) fn mcp_job(&self) -> Option<&mcp::Job> {
@@ -248,6 +270,8 @@ pub fn verb(name: &str) -> &'static str {
         "remember" => "Recordar",
         "forget" => "Olvidar",
         "skill" => "Habilidad",
+        "fetch" => "Leer",
+        "web_search" => "Buscar en internet",
         "save_skill" => "Guardar habilidad",
         _ => "Herramienta",
     }
@@ -408,8 +432,14 @@ pub fn prepare(ctx: &Ctx, call: &Call) -> Result<Action, String> {
     let a = Args(v);
     const PATH: &[&str] = &["path", "file_path", "file", "filename", "filePath"];
     let verb = verb(&call.name);
-    let plain =
-        |target: String, need: Need, job: Job| Action { verb, target, detail: Detail::None, need, job };
+    let plain = |target: String, need: Need, job: Job| Action {
+        verb,
+        target,
+        detail: Detail::None,
+        need,
+        site: None,
+        job,
+    };
     Ok(match call.name.as_str() {
         "read" => {
             let path = resolve(ctx, &a.need(PATH)?)?;
@@ -467,6 +497,7 @@ pub fn prepare(ctx: &Ctx, call: &Call) -> Result<Action, String> {
                 } else {
                     Need::Always("se ejecuta fuera del sandbox".into())
                 },
+                site: None,
                 job: Job::Run { cmd, sandboxed, timeout: Duration::from_secs(secs as u64) },
             }
         }
@@ -494,6 +525,7 @@ fn put(
         target: show(ctx, &path),
         detail: Detail::Diff { added, removed, new: before.is_none(), lines },
         need,
+        site: None,
         job: Job::Put { path, before, after },
     }
 }
@@ -614,6 +646,7 @@ pub fn execute(
     match &action.job {
         Job::Know(j) => know::run(j),
         Job::Mcp(j) => mcp::run(j, ctx.max_chars, cancelled),
+        Job::Browse(j) => crate::browse::run(j, ctx.max_chars),
         Job::Read { path, offset, limit } => match read_text(path) {
             Err(e) => fail(e, "no se pudo leer"),
             Ok(t) => {

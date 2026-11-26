@@ -33,6 +33,7 @@ fn main() {
         copy_of: None,
         know: None,
         mcp: vec![],
+        search: Default::default(),
     };
     agent.prompt(task.clone(), setup);
     for e in rx {

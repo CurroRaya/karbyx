@@ -28,6 +28,8 @@ pub enum Decision {
     AllowAll,
     /// Permitir, y no volver a preguntar por esta herramienta MCP.
     AllowTool,
+    /// Permitir, y no volver a preguntar por este sitio en esta conversación.
+    AllowSite,
     /// No, con una explicación opcional para el modelo.
     Deny(String),
 }
@@ -68,6 +70,8 @@ pub struct Setup {
     pub know: Option<Know>,
     /// Servidores MCP que puede usar.
     pub mcp: Vec<mcp::Server>,
+    /// Con qué busca en internet.
+    pub search: crate::browse::Search,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +126,8 @@ pub struct Ask {
     pub reason: Option<String>,
     /// Servidor y herramienta MCP, si es una.
     pub tool: Option<(String, String)>,
+    /// Sitio de internet que se puede permitir para toda la conversación.
+    pub site: Option<String>,
 }
 
 enum Order {
@@ -164,6 +170,8 @@ impl Agent {
             working: working.clone(),
             stale: stale.clone(),
             mcp: mcp::Set::default(),
+            sites: Default::default(),
+            search: Default::default(),
             frozen: None,
             turn: 0,
             next_id: 1,
@@ -241,6 +249,9 @@ struct Worker {
     /// Servidores MCP en marcha.
     mcp: mcp::Set,
     frozen: Option<Frozen>,
+    /// Sitios permitidos en esta conversación.
+    sites: std::collections::HashSet<String>,
+    search: crate::browse::Search,
 }
 
 /// Mensaje del sistema y herramientas. No cambian a mitad de una conversación
@@ -315,6 +326,7 @@ impl Worker {
             c.skills = k.skills.canonicalize().ok();
         }
         self.mcp.update(&setup.mcp);
+        self.search = setup.search.clone();
         if self.stale.swap(false, Ordering::Relaxed)
             || self.frozen.as_ref().is_none_or(|f| f.root != setup.root || f.mcp != signature(&setup.mcp))
         {
@@ -331,7 +343,9 @@ impl Worker {
                 on(Event::Notice(b));
             }
             let mut defs = if ctx.is_some() { tools::definitions() } else { Vec::new() };
+            defs.extend(crate::browse::definitions());
             let mut system = system_prompt(ctx.as_ref());
+            system.push_str(crate::browse::PROMPT);
             if let Some(k) = know {
                 defs.extend(k.definitions());
                 system.push_str(&k.prompt(max_chars / 3));
@@ -464,7 +478,10 @@ impl Worker {
     fn call(&mut self, call: &Call, ctx: Option<&Ctx>, know: Option<&Know>) -> (String, bool) {
         let id = self.next_id;
         self.next_id += 1;
-        let special = know.and_then(|k| k.prepare(call)).or_else(|| self.mcp.prepare(call));
+        let special = know
+            .and_then(|k| k.prepare(call))
+            .or_else(|| self.mcp.prepare(call))
+            .or_else(|| crate::browse::prepare(call, &self.sites, &self.search));
         let prepared = match (special, ctx) {
             (Some(p), _) => p,
             (None, Some(ctx)) => tools::prepare(ctx, call),
@@ -499,13 +516,17 @@ impl Worker {
             _ if mode == Mode::Full => None,
             Need::Free => None,
             Need::Normal if mode == Mode::Auto => None,
-            Need::Normal => Some(Ask { reason: None, tool: None }),
-            Need::Always(r) => Some(Ask { reason: Some(r.clone()), tool: self.mcp.find(&call.name) }),
+            Need::Normal => Some(Ask { reason: None, tool: None, site: None }),
+            Need::Always(r) => Some(Ask {
+                reason: Some(r.clone()),
+                tool: self.mcp.find(&call.name),
+                site: action.site.clone(),
+            }),
         };
         let asking = ask.is_some();
         let Action { verb, target, detail, .. } = action.clone();
         (self.on)(Event::Action { id, verb, target, detail, ask });
-        if asking && let Some(denial) = self.wait(id, &call.name) {
+        if asking && let Some(denial) = self.wait(id, &call.name, action.site.as_deref()) {
             let stopped = denial.is_empty();
             let text = if stopped {
                 "The user did not allow it and stopped you.".to_string()
@@ -527,6 +548,7 @@ impl Worker {
         let max = ctx.map_or(20_000, |c| c.max_chars);
         let Outcome { ok, text, summary } = match (action.know_job(), ctx) {
             (Some(j), _) => crate::know::run(j),
+            _ if let Some(j) = action.browse_job() => crate::browse::run(j, max),
             _ if let Some(j) = action.mcp_job() => {
                 mcp::run(j, max, &|| stopped.load(Ordering::Relaxed) >= turn)
             }
@@ -542,7 +564,7 @@ impl Worker {
     }
 
     /// Espera el permiso de `id`. `None`: permitido; si no, el motivo.
-    fn wait(&mut self, id: u64, name: &str) -> Option<String> {
+    fn wait(&mut self, id: u64, name: &str, site: Option<&str>) -> Option<String> {
         loop {
             match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Order::Answer(a, d)) if a == id => match d {
@@ -554,6 +576,10 @@ impl Worker {
                     }
                     Decision::AllowTool => {
                         self.mcp.trust(name);
+                        return None;
+                    }
+                    Decision::AllowSite => {
+                        self.sites.extend(site.map(str::to_string));
                         return None;
                     }
                     Decision::Deny(m) => return Some(m),
@@ -804,6 +830,7 @@ mod tests {
                 copy_of: None,
                 know: None,
                 mcp: vec![],
+                search: Default::default(),
             };
             self.agent.prompt("haz algo".into(), setup);
         }
@@ -979,6 +1006,7 @@ mod tests {
             copy_of: None,
             know: None,
             mcp: vec![s, broken],
+            search: Default::default(),
         };
         r.agent.prompt("suma".into(), setup);
         // «Siempre esta herramienta»: la segunda vez no pregunta.
@@ -1000,6 +1028,34 @@ mod tests {
             "{}",
             got[2]
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn always_on_a_site_is_only_that_site() {
+        if skip(&[Needs::Ports]) {
+            return;
+        }
+        let dir = project("sitio");
+        // Nadie escucha en el puerto 9: falla enseguida, pero se pregunta igual.
+        let fetch = |u: &str| tool("fetch", serde_json::json!({"url": u}));
+        let (server, _) = serve(vec![
+            fetch("http://127.0.0.1:9/a"),
+            fetch("http://127.0.0.1:9/b"),
+            fetch("http://localhost:9/"),
+            say("Ya."),
+        ]);
+        let mut r = Run::new();
+        r.send(&server, &dir);
+        let ev = r.finish(Decision::AllowSite);
+        let sites: Vec<Option<String>> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Action { ask: Some(a), .. } => Some(a.site.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sites, [Some("127.0.0.1:9".to_string()), Some("localhost:9".to_string())]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

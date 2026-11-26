@@ -688,6 +688,14 @@ impl Build<'_> {
                 let hit = ChatHit::AllowTool(t.id);
                 x += self.button("Siempre esta herramienta", x, hit, Btn::Plain) + self.d(8.0);
             }
+            if let Some(site) = &a.site {
+                let text = if site == karbyx_agent::browse::SEARCH_SITE {
+                    "Siempre al buscar".to_string()
+                } else {
+                    format!("Siempre en {site}")
+                };
+                x += self.button(&text, x, ChatHit::AllowSite(t.id), Btn::Plain) + self.d(8.0);
+            }
             x += self.button("No, para  esc", x, ChatHit::Deny(t.id), Btn::Plain) + self.d(14.0);
             let y = self.y;
             self.label(

@@ -32,6 +32,8 @@ Por ejemplo, que en *Pregunta antes* o en *Automático*, sin que lo apruebes:
   `.karbyx`, `.claude`...).
 - Se arranque un servidor MCP, se use una de sus herramientas o se guarde algo en
   la memoria.
+- Se lea una página o se busque en internet sin enseñar antes la dirección o lo
+  que se busca (salvo en los sitios que hayas permitido).
 - Una tarjeta de permiso enseñe algo distinto de lo que se hará.
 - La vista previa (*Ver*) cargue algo de la red, se vaya a otra página o lea tus
   archivos.

@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod browse;
 pub mod catalog;
 mod compact;
 pub mod exec;

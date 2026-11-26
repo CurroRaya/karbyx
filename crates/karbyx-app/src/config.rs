@@ -30,6 +30,11 @@
 //! [verify.commands]          # por proyecto; si no, se detecta (cargo, npm, go...)
 //! karbyx = "cargo test --workspace"
 //!
+//! [search]                 # con qué busca el chat en internet
+//! engine = "duckduckgo"      # duckduckgo (sin clave) | searxng | brave
+//! url = "https://searx.example"   # con searxng: tu servidor, con el formato JSON activado
+//! key = "..."                # con brave: tu clave de la API (deja el archivo solo para ti)
+//!
 //! [keys]
 //! new_tab = "cmd+t"
 //! split_right = "cmd+d"
@@ -102,6 +107,31 @@ pub struct ThemeConfig {
     pub ansi: Option<Vec<String>>,
 }
 
+/// Buscador para el chat.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SearchConfig {
+    pub engine: String,
+    pub url: String,
+    pub key: String,
+}
+
+impl SearchConfig {
+    /// El buscador elegido; si falta lo que necesita, DuckDuckGo.
+    pub fn engine(&self) -> karbyx_agent::browse::Search {
+        use karbyx_agent::browse::Search;
+        match self.engine.to_ascii_lowercase().as_str() {
+            "searxng" | "searx" if self.url.starts_with("http") => Search::SearXng(self.url.clone()),
+            "brave" if !self.key.trim().is_empty() => Search::Brave(self.key.trim().to_string()),
+            "duckduckgo" | "ddg" | "" => Search::DuckDuckGo,
+            other => {
+                log::warn!("buscador desconocido o incompleto ({other}): se usa DuckDuckGo");
+                Search::DuckDuckGo
+            }
+        }
+    }
+}
+
 /// Verificación automática de lo que hacen los agentes.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default)]
@@ -141,6 +171,7 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub theme: ThemeConfig,
     pub verify: VerifyConfig,
+    pub search: SearchConfig,
     /// Acción → atajo (`"cmd+shift+d"`).
     pub keys: BTreeMap<String, String>,
 }
